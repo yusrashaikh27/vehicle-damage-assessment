@@ -1,0 +1,25 @@
+# Pinned to what is installed in ./venv (Python 3.12) as of 23 Aug 2026.
+# Rebuild from scratch with:
+#   python3.12 -m venv venv && ./venv/bin/pip install -r requirements.txt
+#
+# Python 3.12, not 3.14: torch and ultralytics do not publish reliable wheels
+# for 3.14 yet, and building them from source is not something you want to be
+# doing the week before a submission.
+
+# Web
+Django==6.1
+djangorestframework==3.18.0
+
+# Model + imaging
+ultralytics==8.4.126
+torch==2.13.0
+torchvision==0.28.0
+opencv-python==5.0.0.93
+pillow==12.3.0
+numpy==2.5.2
+
+# PDF report generation
+reportlab==5.0.1
+
+# Dataset tooling (tools/prepare_dataset.py)
+PyYAML==6.0.3

@@ -1,0 +1,1441 @@
+/* ==========================================================================
+   Vehicle Damage Assessment and Cost Estimator - stylesheet
+   ==========================================================================
+
+   The look is a workshop job card: a printed docket a service advisor fills in
+   and hands over with the vehicle. That is the same artefact this system
+   produces, so the interface borrows its vocabulary - squared corners, hairline
+   rules, monospace for every measured figure, hazard yellow reserved for
+   warnings only.
+
+   Two rules held throughout:
+
+   1. Monospace for data, sans for prose. Money, areas, confidences and docket
+      numbers are set in a mono face so digits line up in a column and can be
+      compared down the page. Explanations are set in the system sans, because
+      mono is slow to read in sentences.
+
+   2. Colour carries meaning or it is not used. Green / amber / red mean minor /
+      moderate / severe and nothing else. Hazard yellow means "this figure is
+      not from a trained model". There is no decorative colour anywhere.
+
+   No webfonts and no CDN: the lab machine may be offline during the demo, and a
+   font request that times out would leave the page rendering in Times New Roman
+   for thirty seconds. System font stacks always resolve.
+   ========================================================================== */
+
+:root {
+  color-scheme: light;
+
+  /* Cool primer grey, the shade of a panel in body filler - not the warm cream
+     that every template defaults to. */
+  --paper: #edeef0;
+  --card: #ffffff;
+  --ink: #15181b;
+  --ink-soft: #3a4149;
+  --muted: #6a727b;
+  --rule: #c9cdd3;
+  --rule-soft: #dee1e5;
+
+  /* Hazard yellow. Warnings and the brand mark only. */
+  --signal: #ffc300;
+  --signal-deep: #b98d00;
+
+  /* Severity. Also used by the PDF, so screen and print agree. */
+  --minor: #2e7d5b;
+  --moderate: #b26b00;
+  --severe: #b3261e;
+  --minor-wash: #e7f2ec;
+  --moderate-wash: #fbf0dd;
+  --severe-wash: #fbe9e7;
+
+  --sans: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial,
+    sans-serif;
+  --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas,
+    "Liberation Mono", monospace;
+
+  --wrap: 1120px;
+  --gap: 24px;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html {
+  -webkit-text-size-adjust: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--sans);
+  font-size: 15px;
+  line-height: 1.55;
+}
+
+a {
+  color: var(--ink);
+  text-decoration-color: var(--rule);
+  text-underline-offset: 2px;
+}
+
+a:hover {
+  text-decoration-color: var(--ink);
+}
+
+:focus-visible {
+  outline: 2px solid var(--ink);
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * {
+    transition: none !important;
+    animation: none !important;
+  }
+}
+
+.wrap {
+  width: 100%;
+  max-width: var(--wrap);
+  margin: 0 auto;
+  padding: 0 20px;
+}
+
+.skip {
+  position: absolute;
+  left: -9999px;
+}
+
+.skip:focus {
+  left: 12px;
+  top: 12px;
+  z-index: 20;
+  background: var(--signal);
+  color: var(--ink);
+  padding: 8px 14px;
+  font-family: var(--mono);
+}
+
+/* --------------------------------------------------------------------------
+   Masthead
+   -------------------------------------------------------------------------- */
+
+.masthead {
+  background: var(--ink);
+  border-bottom: 3px solid var(--signal);
+}
+
+.masthead-inner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  min-height: 62px;
+  flex-wrap: wrap;
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  text-decoration: none;
+  padding: 10px 0;
+}
+
+.brand-mark {
+  font-family: var(--mono);
+  font-weight: 700;
+  font-size: 15px;
+  letter-spacing: 0.06em;
+  background: var(--signal);
+  color: var(--ink);
+  padding: 5px 8px;
+}
+
+.brand-text {
+  color: #fff;
+  font-size: 14px;
+  line-height: 1.25;
+  font-weight: 600;
+}
+
+.brand-text em {
+  display: block;
+  font-style: normal;
+  font-weight: 400;
+  font-size: 11.5px;
+  letter-spacing: 0.02em;
+  color: #9aa3ad;
+}
+
+.masthead nav {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+
+.masthead nav a {
+  font-family: var(--mono);
+  font-size: 11.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.09em;
+  color: #c4cad1;
+  text-decoration: none;
+  padding: 8px 11px;
+  border: 1px solid transparent;
+}
+
+.masthead nav a:hover {
+  color: #fff;
+  border-color: #3a4149;
+}
+
+.masthead nav a[aria-current="page"] {
+  color: var(--ink);
+  background: var(--signal);
+  border-color: var(--signal);
+}
+
+/* --------------------------------------------------------------------------
+   Site-wide notices
+   -------------------------------------------------------------------------- */
+
+/* Actual hazard tape. The one place in the interface allowed to shout, because
+   it is saying the numbers below it were invented by a placeholder. */
+.notice-stub {
+  background: #fff8e1;
+  border-bottom: 1px solid var(--rule);
+  background-image: repeating-linear-gradient(
+    -45deg,
+    var(--signal) 0 14px,
+    var(--ink) 14px 28px
+  );
+  background-size: 100% 6px;
+  background-repeat: no-repeat;
+  background-position: top left;
+  padding-top: 6px;
+}
+
+.notice-stub-body {
+  padding: 12px 0 14px;
+  display: flex;
+  gap: 14px;
+  align-items: baseline;
+  flex-wrap: wrap;
+}
+
+.notice-stub strong {
+  font-family: var(--mono);
+  font-size: 11.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.09em;
+  background: var(--ink);
+  color: var(--signal);
+  padding: 3px 7px;
+  white-space: nowrap;
+}
+
+.notice-stub p {
+  margin: 0;
+  font-size: 13.5px;
+  color: var(--ink-soft);
+  max-width: 78ch;
+}
+
+.notice-stub code {
+  font-family: var(--mono);
+  font-size: 12.5px;
+  background: #fff;
+  border: 1px solid var(--rule);
+  padding: 1px 5px;
+}
+
+.messages {
+  margin: 20px 0 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 8px;
+}
+
+.messages li {
+  border: 1px solid var(--rule);
+  border-left: 4px solid var(--muted);
+  background: var(--card);
+  padding: 11px 14px;
+  font-size: 14px;
+}
+
+.messages li.error {
+  border-left-color: var(--severe);
+  background: var(--severe-wash);
+}
+
+.messages li.success {
+  border-left-color: var(--minor);
+  background: var(--minor-wash);
+}
+
+.messages li.warning {
+  border-left-color: var(--moderate);
+  background: var(--moderate-wash);
+}
+
+/* --------------------------------------------------------------------------
+   Page furniture
+   -------------------------------------------------------------------------- */
+
+main {
+  padding: 28px 20px 56px;
+}
+
+.page-head {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 20px;
+  flex-wrap: wrap;
+  margin-bottom: 22px;
+  padding-bottom: 14px;
+  border-bottom: 1px solid var(--rule);
+}
+
+.page-head h1 {
+  margin: 0;
+  font-size: 24px;
+  line-height: 1.2;
+  letter-spacing: -0.01em;
+}
+
+.page-head p {
+  margin: 6px 0 0;
+  color: var(--muted);
+  font-size: 14px;
+  max-width: 72ch;
+}
+
+.eyebrow {
+  display: block;
+  font-family: var(--mono);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.13em;
+  color: var(--muted);
+  margin-bottom: 7px;
+}
+
+.card {
+  background: var(--card);
+  border: 1px solid var(--rule);
+  border-radius: 2px;
+}
+
+.card-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 14px;
+  flex-wrap: wrap;
+  padding: 13px 18px;
+  border-bottom: 1px solid var(--rule);
+  background: #f7f8f9;
+}
+
+.card-head h2,
+.card-head h3 {
+  margin: 0;
+  font-family: var(--mono);
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+}
+
+.card-head .hint {
+  font-size: 12.5px;
+  color: var(--muted);
+}
+
+.card-body {
+  padding: 18px;
+}
+
+.card-body > :first-child {
+  margin-top: 0;
+}
+
+.card-body > :last-child {
+  margin-bottom: 0;
+}
+
+footer.site {
+  border-top: 1px solid var(--rule);
+  background: #e4e6e9;
+  padding: 20px 0 30px;
+  font-size: 12.5px;
+  color: var(--muted);
+}
+
+footer.site p {
+  margin: 0 0 4px;
+}
+
+footer.site code {
+  font-family: var(--mono);
+  font-size: 12px;
+}
+
+/* --------------------------------------------------------------------------
+   Forms
+   -------------------------------------------------------------------------- */
+
+.form-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px 18px;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  min-width: 0;
+}
+
+.field.span-2 {
+  grid-column: 1 / -1;
+}
+
+.field > label {
+  font-family: var(--mono);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--ink-soft);
+}
+
+.field .req {
+  color: var(--severe);
+}
+
+input[type="text"],
+input[type="number"],
+input[type="search"],
+input[type="file"],
+select,
+textarea {
+  font-family: var(--mono);
+  font-size: 14px;
+  color: var(--ink);
+  background: #fcfcfd;
+  border: 1px solid var(--rule);
+  border-radius: 2px;
+  padding: 9px 10px;
+  width: 100%;
+  min-width: 0;
+}
+
+select {
+  /* Native chevron is removed by appearance:none on some platforms and then
+     never comes back, so the platform control is left alone. */
+  background: #fcfcfd;
+}
+
+input:focus,
+select:focus,
+textarea:focus {
+  border-color: var(--ink);
+  outline: 2px solid var(--signal);
+  outline-offset: 0;
+}
+
+.helptext {
+  font-size: 12.5px;
+  color: var(--muted);
+  font-family: var(--sans);
+}
+
+.errorlist {
+  margin: 3px 0 0;
+  padding: 0 0 0 16px;
+  color: var(--severe);
+  font-size: 12.5px;
+}
+
+.form-error-summary {
+  border: 1px solid var(--severe);
+  border-left-width: 4px;
+  background: var(--severe-wash);
+  padding: 12px 14px;
+  margin-bottom: 18px;
+  font-size: 13.5px;
+}
+
+.form-error-summary p {
+  margin: 0;
+}
+
+/* Explanatory text beside a control or above a group of them. Quieter than body
+   copy, louder than a caption. Used wherever the page needs to say why it is
+   asking for something, which on this project is often. */
+.note {
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--muted);
+  max-width: 62ch;
+}
+
+/* --------------------------------------------------------------------------
+   The walk-around: one slot per camera angle.
+
+   Laid out as a grid of small plates rather than a long column of file inputs,
+   because the set of angles is the instruction. Seeing ten labelled positions at
+   once tells the user what a complete submission looks like without a paragraph
+   explaining it, and a slot that has a photograph in it reads as filled at a
+   glance, so what is still missing is obvious.
+
+   Each plate is a dashed outline until it holds a file, then it goes solid with
+   an ink left edge - the same "provisional becomes recorded" idea the rest of the
+   job-card styling uses.
+   -------------------------------------------------------------------------- */
+
+.shots {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
+  gap: 14px;
+}
+
+.shot {
+  border: 1px dashed var(--rule);
+  background: #fafbfc;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  min-width: 0;
+  transition: border-color 0.12s, background 0.12s;
+}
+
+.shot.filled {
+  border-style: solid;
+  border-color: var(--rule);
+  border-left: 3px solid var(--ink);
+  background: var(--card);
+}
+
+/* The close-up. Flagged because it is the one shot that most improves the
+   estimate - area is measured against what is in frame - so a user with time for
+   only one photograph should be steered here. */
+.shot.recommended {
+  border-color: var(--ink-soft);
+}
+
+.shot.recommended.filled {
+  border-left-color: var(--signal);
+}
+
+.shot-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.shot-head b {
+  font-family: var(--mono);
+  font-size: 11.5px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--ink);
+  line-height: 1.3;
+}
+
+.shot-head .tag {
+  font-family: var(--mono);
+  font-size: 9.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  background: var(--signal);
+  color: var(--ink);
+  padding: 2px 5px;
+  white-space: nowrap;
+}
+
+.shot .hint {
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--muted);
+  margin: 0;
+}
+
+.shot input[type="file"] {
+  background: #fff;
+  font-size: 12px;
+  width: 100%;
+}
+
+.shot select {
+  font-size: 12.5px;
+  padding: 6px 8px;
+}
+
+.shot-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.shot-panel span {
+  font-family: var(--mono);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: var(--ink-soft);
+}
+
+.shot-thumb {
+  display: none;
+  gap: 9px;
+  align-items: center;
+  border-top: 1px solid var(--rule-soft);
+  padding-top: 9px;
+}
+
+.shot.filled .shot-thumb {
+  display: flex;
+}
+
+.shot-thumb img {
+  width: 54px;
+  height: 40px;
+  object-fit: cover;
+  border: 1px solid var(--rule);
+  background: var(--paper);
+  flex: none;
+}
+
+.shot-thumb small {
+  font-family: var(--mono);
+  font-size: 10.5px;
+  color: var(--ink-soft);
+  word-break: break-all;
+  line-height: 1.3;
+}
+
+.shot .errorlist {
+  margin: 0;
+}
+
+/* Live count of filled slots, updated by the page's progressive-enhancement
+   script. Hidden when scripting is off, because a counter that never changes
+   would be worse than none. */
+.shot-tally {
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--ink-soft);
+}
+
+.shot-tally b {
+  color: var(--ink);
+}
+
+/* Cards stacked down the main column of the upload page. */
+.stack {
+  display: grid;
+  gap: var(--gap);
+  align-content: start;
+  min-width: 0;
+}
+
+.form-actions {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+  margin-top: 20px;
+  padding-top: 16px;
+  border-top: 1px solid var(--rule-soft);
+}
+
+/* Beside the submit button the note sits on one line with it, so it is smaller
+   and not width-limited. */
+.form-actions .note {
+  font-size: 12.5px;
+  max-width: none;
+}
+
+/* --------------------------------------------------------------------------
+   Buttons
+   -------------------------------------------------------------------------- */
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-family: var(--mono);
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.09em;
+  text-decoration: none;
+  cursor: pointer;
+  padding: 11px 18px;
+  border: 1px solid var(--ink);
+  border-radius: 2px;
+  background: var(--ink);
+  color: #fff;
+}
+
+.btn:hover {
+  background: #000;
+}
+
+.btn-signal {
+  background: var(--signal);
+  border-color: var(--signal-deep);
+  color: var(--ink);
+}
+
+.btn-signal:hover {
+  background: #ffd23d;
+}
+
+.btn-quiet {
+  background: transparent;
+  color: var(--ink);
+  border-color: var(--rule);
+}
+
+.btn-quiet:hover {
+  background: #fff;
+  border-color: var(--ink);
+}
+
+.btn-sm {
+  padding: 7px 12px;
+  font-size: 11px;
+}
+
+/* --------------------------------------------------------------------------
+   Docket header (results page)
+   -------------------------------------------------------------------------- */
+
+.docket {
+  background: var(--card);
+  border: 1px solid var(--rule);
+  border-top: 3px solid var(--ink);
+  border-radius: 2px;
+  padding: 18px;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 20px;
+  flex-wrap: wrap;
+  margin-bottom: var(--gap);
+}
+
+.docket-id h1 {
+  margin: 0;
+  font-family: var(--mono);
+  font-size: 22px;
+  letter-spacing: 0.02em;
+}
+
+.docket-id p {
+  margin: 5px 0 0;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.docket-actions {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+/* --------------------------------------------------------------------------
+   Chips and status
+   -------------------------------------------------------------------------- */
+
+.chip {
+  display: inline-block;
+  font-family: var(--mono);
+  font-size: 10.5px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.09em;
+  padding: 3px 7px;
+  border: 1px solid;
+  border-radius: 2px;
+  white-space: nowrap;
+}
+
+.chip-minor {
+  color: var(--minor);
+  border-color: var(--minor);
+  background: var(--minor-wash);
+}
+
+.chip-moderate {
+  color: var(--moderate);
+  border-color: var(--moderate);
+  background: var(--moderate-wash);
+}
+
+.chip-severe {
+  color: var(--severe);
+  border-color: var(--severe);
+  background: var(--severe-wash);
+}
+
+.chip-none {
+  color: var(--muted);
+  border-color: var(--rule);
+  background: #f4f5f6;
+}
+
+.chip-stub {
+  color: var(--ink);
+  border-color: var(--signal-deep);
+  background: var(--signal);
+}
+
+/* --------------------------------------------------------------------------
+   Result layout
+   -------------------------------------------------------------------------- */
+
+.result-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.5fr) minmax(280px, 1fr);
+  gap: var(--gap);
+  align-items: start;
+  margin-bottom: var(--gap);
+}
+
+.plate {
+  display: block;
+  width: 100%;
+  background: #1b1f23;
+  border: 1px solid var(--rule);
+  border-radius: 2px;
+}
+
+.plate img {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+.plate-caption {
+  font-size: 12.5px;
+  color: var(--muted);
+  padding: 10px 14px;
+  background: var(--card);
+  border-top: 1px solid var(--rule);
+}
+
+/* --------------------------------------------------------------------------
+   Contact sheet: every photograph of the walk-around, side by side.
+
+   Auto-fill means the same markup handles one photograph and ten - a single
+   plate simply fills the row, which is the layout the page had before the
+   walk-around existed.
+   -------------------------------------------------------------------------- */
+
+.plates {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
+  gap: 14px;
+  min-width: 0;
+}
+
+/* A fixed aspect box so the rows line up whatever the phones produced, with
+   `contain` rather than `cover`: this is evidence, and cropping it could hide
+   the damage the caption claims is there. The dark plate does the letterboxing. */
+.plates .plate img {
+  aspect-ratio: 4 / 3;
+  object-fit: contain;
+}
+
+/* One plate on its own is the whole exhibit, so let it be taller. */
+.plates:has(> .plate:only-child) .plate img {
+  aspect-ratio: auto;
+}
+
+.plate-caption b {
+  color: var(--ink);
+  font-family: var(--mono);
+  font-size: 11.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+/* --------------------------------------------------------------------------
+   Per-photograph result block, inside the "damage detected" card.
+
+   Area fractions are measured against one frame, so detections are grouped by
+   the photograph they came from and each group states its own denominator. A
+   flat table would put percentages from different frames in one column, which
+   invites a comparison that is not valid.
+   -------------------------------------------------------------------------- */
+
+.viewblock + .viewblock {
+  border-top: 1px solid var(--rule);
+}
+
+.viewblock-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 12px 18px;
+  background: #fbfbfc;
+  border-bottom: 1px solid var(--rule-soft);
+}
+
+.viewblock-head img {
+  width: 62px;
+  height: 46px;
+  object-fit: cover;
+  border: 1px solid var(--rule);
+  background: #1b1f23;
+  flex: none;
+}
+
+.viewblock-head h3 {
+  margin: 0;
+  font-family: var(--mono);
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.09em;
+}
+
+.viewblock-head .frame-meta {
+  margin: 2px 0 0;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.viewblock-head .frame-meta code {
+  font-family: var(--mono);
+  font-size: 11.5px;
+}
+
+.viewblock-empty {
+  padding: 14px 18px;
+  margin: 0;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+/* Definition-list slab: the vehicle and provenance blocks. */
+.slab {
+  margin: 0;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+}
+
+.slab > dt,
+.slab > dd {
+  padding: 8px 0;
+  border-bottom: 1px solid var(--rule-soft);
+  min-width: 0;
+}
+
+.slab > dt {
+  font-family: var(--mono);
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+  padding-right: 18px;
+  white-space: nowrap;
+}
+
+.slab > dd {
+  margin: 0;
+  font-family: var(--mono);
+  font-size: 13.5px;
+  text-align: right;
+  word-break: break-word;
+}
+
+.slab > dt:last-of-type,
+.slab > dd:last-of-type {
+  border-bottom: 0;
+}
+
+/* The single headline figure. */
+.headline {
+  border-top: 1px solid var(--rule);
+  margin-top: 4px;
+  padding-top: 14px;
+}
+
+.headline .label {
+  font-family: var(--mono);
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--muted);
+}
+
+.headline .figure {
+  display: block;
+  font-family: var(--mono);
+  font-size: 30px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  line-height: 1.15;
+  margin-top: 4px;
+}
+
+.headline .figure-note {
+  display: block;
+  font-size: 12.5px;
+  color: var(--muted);
+  margin-top: 5px;
+  font-family: var(--sans);
+}
+
+/* --------------------------------------------------------------------------
+   Tables
+   -------------------------------------------------------------------------- */
+
+.table-scroll {
+  overflow-x: auto;
+}
+
+table.data {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13.5px;
+}
+
+table.data caption {
+  text-align: left;
+  font-size: 12.5px;
+  color: var(--muted);
+  padding: 0 18px 12px;
+}
+
+table.data th,
+table.data td {
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--rule-soft);
+  text-align: left;
+  vertical-align: top;
+}
+
+table.data thead th {
+  background: var(--ink);
+  color: #fff;
+  font-family: var(--mono);
+  font-size: 10.5px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  white-space: nowrap;
+  border-bottom: 0;
+}
+
+table.data tbody tr:last-child th,
+table.data tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+table.data tbody tr:hover td {
+  background: #fafbfc;
+}
+
+/* Numbers right-aligned and monospaced so columns of money compare down the
+   page. Never let a currency column wrap. */
+table.data .num {
+  text-align: right;
+  font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+table.data .strong {
+  font-weight: 700;
+}
+
+.rowmeta {
+  display: block;
+  font-size: 12px;
+  color: var(--muted);
+  margin-top: 3px;
+}
+
+.thumb {
+  width: 56px;
+  height: 42px;
+  object-fit: cover;
+  border: 1px solid var(--rule);
+  background: var(--paper);
+  display: block;
+}
+
+.thumb-empty {
+  width: 56px;
+  height: 42px;
+  border: 1px dashed var(--rule);
+  background: var(--paper);
+}
+
+/* --------------------------------------------------------------------------
+   Area meter - the signature element
+   --------------------------------------------------------------------------
+   Shows the measured mask area against the two thresholds that banded it. The
+   point is that severity here is a documented rule over a measurement, not a
+   prediction, so the rule and the measurement are drawn together and the reader
+   can check the verdict rather than trust it. */
+
+.meter {
+  margin-top: 10px;
+  max-width: 460px;
+}
+
+.meter-track {
+  position: relative;
+  height: 16px;
+  background: var(--paper);
+  border: 1px solid var(--rule);
+  border-radius: 2px;
+  overflow: hidden;
+}
+
+.meter-zone {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+}
+
+.zone-minor {
+  background: var(--minor-wash);
+  border-right: 1px solid var(--rule);
+}
+
+.zone-moderate {
+  background: var(--moderate-wash);
+  border-right: 1px solid var(--rule);
+}
+
+.zone-severe {
+  background: var(--severe-wash);
+}
+
+/* The measurement. A 3px bar, not a dot: it has to be findable against three
+   pale washes. */
+.meter-mark {
+  position: absolute;
+  top: -1px;
+  bottom: -1px;
+  width: 3px;
+  margin-left: -1.5px;
+  background: var(--ink);
+}
+
+.meter-mark.is-minor {
+  background: var(--minor);
+}
+
+.meter-mark.is-moderate {
+  background: var(--moderate);
+}
+
+.meter-mark.is-severe {
+  background: var(--severe);
+}
+
+.meter-scale {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  margin-top: 5px;
+  font-family: var(--mono);
+  font-size: 10.5px;
+  color: var(--muted);
+  letter-spacing: 0.02em;
+}
+
+.meter-rule {
+  margin: 7px 0 0;
+  font-size: 12.5px;
+  color: var(--ink-soft);
+}
+
+/* --------------------------------------------------------------------------
+   Totals block
+   -------------------------------------------------------------------------- */
+
+.totals {
+  margin-left: auto;
+  width: 100%;
+  max-width: 380px;
+  border-collapse: collapse;
+  font-size: 13.5px;
+}
+
+.totals th {
+  text-align: left;
+  font-weight: 400;
+  color: var(--ink-soft);
+  padding: 7px 12px;
+}
+
+.totals td {
+  text-align: right;
+  font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  padding: 7px 12px;
+}
+
+.totals tr.rule-above th,
+.totals tr.rule-above td {
+  border-top: 1px solid var(--rule);
+}
+
+.totals tr.payable th,
+.totals tr.payable td {
+  background: var(--signal);
+  font-weight: 700;
+  font-size: 15px;
+  color: var(--ink);
+  border-top: 2px solid var(--ink);
+}
+
+/* --------------------------------------------------------------------------
+   Notes, callouts, empty states
+   -------------------------------------------------------------------------- */
+
+.notes {
+  margin: 0;
+  padding-left: 20px;
+  display: grid;
+  gap: 6px;
+  font-size: 13.5px;
+  color: var(--ink-soft);
+}
+
+.callout {
+  border: 1px solid var(--rule);
+  border-left: 4px solid var(--ink);
+  background: #f7f8f9;
+  padding: 13px 15px;
+  font-size: 13.5px;
+}
+
+.callout.danger {
+  border-left-color: var(--severe);
+  background: var(--severe-wash);
+}
+
+.callout p {
+  margin: 0 0 6px;
+}
+
+.callout p:last-child {
+  margin-bottom: 0;
+}
+
+.callout code {
+  font-family: var(--mono);
+  font-size: 12.5px;
+}
+
+.empty {
+  text-align: center;
+  padding: 52px 20px;
+  color: var(--muted);
+}
+
+.empty h2 {
+  margin: 0 0 8px;
+  font-size: 17px;
+  color: var(--ink);
+}
+
+.empty p {
+  margin: 0 auto 18px;
+  max-width: 52ch;
+  font-size: 14px;
+}
+
+/* --------------------------------------------------------------------------
+   Method list (upload page aside)
+   -------------------------------------------------------------------------- */
+
+.method {
+  counter-reset: step;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 15px;
+}
+
+.method li {
+  counter-increment: step;
+  display: grid;
+  grid-template-columns: 26px minmax(0, 1fr);
+  gap: 12px;
+  font-size: 13px;
+  color: var(--ink-soft);
+}
+
+.method li::before {
+  content: counter(step);
+  font-family: var(--mono);
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--ink);
+  background: var(--signal);
+  height: 22px;
+  display: grid;
+  place-items: center;
+}
+
+.method b {
+  display: block;
+  color: var(--ink);
+  font-size: 13px;
+}
+
+/* --------------------------------------------------------------------------
+   History page
+   -------------------------------------------------------------------------- */
+
+.stat-strip {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 1px;
+  background: var(--rule);
+  border: 1px solid var(--rule);
+  border-radius: 2px;
+  margin-bottom: var(--gap);
+}
+
+.stat {
+  background: var(--card);
+  padding: 15px 17px;
+}
+
+.stat .label {
+  display: block;
+  font-family: var(--mono);
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.09em;
+  color: var(--muted);
+}
+
+.stat .figure {
+  display: block;
+  font-family: var(--mono);
+  font-size: 22px;
+  font-weight: 700;
+  margin-top: 4px;
+  letter-spacing: -0.01em;
+}
+
+.stat .figure.warn {
+  color: var(--signal-deep);
+}
+
+.searchbar {
+  display: flex;
+  gap: 10px;
+  align-items: stretch;
+  flex-wrap: wrap;
+  margin-bottom: 16px;
+}
+
+.searchbar input[type="search"] {
+  flex: 1 1 260px;
+  width: auto;
+}
+
+.pager {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  flex-wrap: wrap;
+  margin-top: 18px;
+}
+
+.pager .count {
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.pager .links {
+  display: flex;
+  gap: 8px;
+}
+
+/* --------------------------------------------------------------------------
+   Narrow screens
+   -------------------------------------------------------------------------- */
+
+@media (max-width: 900px) {
+  .result-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .stat-strip {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 620px) {
+  .form-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .docket-id h1 {
+    font-size: 18px;
+  }
+
+  .headline .figure {
+    font-size: 25px;
+  }
+}
+
+/* --------------------------------------------------------------------------
+   Print
+   -------------------------------------------------------------------------- */
+/* The real deliverable is the generated PDF, but a printed results page should
+   not waste ink on chrome or carry links nobody can click. */
+
+@media print {
+  body {
+    background: #fff;
+  }
+
+  .masthead,
+  .notice-stub,
+  .docket-actions,
+  .searchbar,
+  .pager,
+  footer.site {
+    display: none !important;
+  }
+
+  .card,
+  .docket {
+    border-color: #999;
+    break-inside: avoid;
+  }
+}

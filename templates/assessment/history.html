@@ -1,0 +1,179 @@
+{% extends "base.html" %}
+{% load money %}
+{% comment %}
+Past inspections. The columns here are deliberately limited to the fields the
+view's `.only()` call loaded - segment, owner phone and the six money columns
+other than `total` are not among them. Rendering a deferred field would make
+Django fetch it row by row, turning one query into thirteen; the fix would be to
+widen `HISTORY_FIELDS` in the view, not to reach for the attribute here.
+
+The photographs are the exception: they are a related table, pulled in by
+`prefetch_related("images__detections")`, so `primary_image`, `view_count` and
+`damage_count` are all answered from memory rather than from a query per row.
+{% endcomment %}
+
+{% block title %}Records &middot; Vehicle Damage Assessment{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div>
+    <span class="eyebrow">Inspection records</span>
+    <h1>Assessment history</h1>
+    <p>
+      Every assessment is stored with the figures it produced at the time, so a
+      docket issued last week still reads the same after the model or the rate
+      card is changed.
+    </p>
+  </div>
+  <a class="btn btn-signal" href="{% url 'assessment:upload' %}">New inspection</a>
+</div>
+
+<div class="stat-strip">
+  <div class="stat">
+    <span class="label">Inspections</span>
+    <span class="figure">{{ summary.total_count }}</span>
+  </div>
+  <div class="stat">
+    <span class="label">Estimated value</span>
+    <span class="figure">{{ summary.value|rupees }}</span>
+  </div>
+  <div class="stat">
+    <span class="label">Graded severe</span>
+    <span class="figure">{{ summary.severe }}</span>
+  </div>
+  <div class="stat">
+    <span class="label">Placeholder model</span>
+    <span class="figure{% if summary.stubbed %} warn{% endif %}">{{ summary.stubbed }}</span>
+  </div>
+</div>
+
+<form class="searchbar" method="get" role="search">
+  <label class="skip" for="q">Search records</label>
+  <input type="search" id="q" name="q" value="{{ query }}"
+         placeholder="Registration, owner, make or model" autocomplete="off">
+  <button type="submit" class="btn">Search</button>
+  {% if query %}
+  <a class="btn btn-quiet" href="{% url 'assessment:history' %}">Clear</a>
+  {% endif %}
+</form>
+
+{% if page.object_list %}
+<section class="card">
+  <div class="card-head">
+    <h2>{% if query %}Matching records{% else %}All records{% endif %}</h2>
+    <span class="hint">Newest first</span>
+  </div>
+  <div class="table-scroll">
+    <table class="data">
+      <thead>
+        <tr>
+          <th scope="col"><span class="skip">Thumbnail</span></th>
+          <th scope="col">Docket</th>
+          <th scope="col">Owner and vehicle</th>
+          <th scope="col">Registration</th>
+          <th scope="col">Severity</th>
+          <th scope="col" class="num">Regions</th>
+          <th scope="col" class="num">Estimate</th>
+          <th scope="col"><span class="skip">Open</span></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for inspection in page.object_list %}
+        <tr>
+          <td>
+            {# `with` so the property runs once per row rather than once per
+               reference - it walks the prefetched photographs to find the
+               close-up, and there is no reason to walk it three times. #}
+            {% with shot=inspection.primary_image %}
+            {% if shot and shot.display_image %}
+              <img class="thumb" src="{{ shot.display_image.url }}" alt="">
+            {% else %}
+              <span class="thumb-empty" aria-hidden="true"></span>
+            {% endif %}
+            {% if inspection.view_count > 1 %}
+            <span class="rowmeta">+{{ inspection.view_count|add:"-1" }} more</span>
+            {% endif %}
+            {% endwith %}
+          </td>
+          <td>
+            <a href="{% url 'assessment:result' inspection.pk %}"
+               style="font-family:var(--mono); font-size:13px">{{ inspection.docket_number }}</a>
+            <span class="rowmeta">{{ inspection.created_at|date:"j M Y, g:i a" }}</span>
+          </td>
+          <td>
+            {{ inspection.owner_name }}
+            <span class="rowmeta">
+              {{ inspection.vehicle_description }}
+              {% if inspection.is_stub %}<br><span class="chip chip-stub">Placeholder model</span>{% endif %}
+            </span>
+          </td>
+          <td style="font-family:var(--mono); font-size:13px">{{ inspection.registration_number }}</td>
+          <td>
+            {% if inspection.status == "failed" %}
+              <span class="chip chip-severe">Failed</span>
+            {% elif inspection.overall_severity %}
+              <span class="chip chip-{{ inspection.overall_severity }}">{{ inspection.get_overall_severity_display }}</span>
+            {% else %}
+              <span class="chip chip-none">No damage</span>
+            {% endif %}
+          </td>
+          <td class="num">
+            {{ inspection.damage_count }}
+            {% if inspection.view_count > 1 %}
+            <span class="rowmeta">in {{ inspection.view_count }} frames</span>
+            {% endif %}
+          </td>
+          <td class="num strong">{{ inspection.total|rupees }}</td>
+          <td>
+            <a class="btn btn-quiet btn-sm" href="{% url 'assessment:result' inspection.pk %}">Open</a>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+
+{% if page.has_other_pages %}
+<nav class="pager" aria-label="Pagination">
+  <span class="count">
+    Page {{ page.number }} of {{ page.paginator.num_pages }} &middot;
+    {{ page.paginator.count }} record{{ page.paginator.count|pluralize }}
+  </span>
+  <span class="links">
+    {% if page.has_previous %}
+    <a class="btn btn-quiet btn-sm"
+       href="?page={{ page.previous_page_number }}{% if query %}&amp;q={{ query|urlencode }}{% endif %}">Previous</a>
+    {% endif %}
+    {% if page.has_next %}
+    <a class="btn btn-quiet btn-sm"
+       href="?page={{ page.next_page_number }}{% if query %}&amp;q={{ query|urlencode }}{% endif %}">Next</a>
+    {% endif %}
+  </span>
+</nav>
+{% endif %}
+
+{% else %}
+<section class="card">
+  <div class="empty">
+    {% if query %}
+      <h2>Nothing matched &ldquo;{{ query }}&rdquo;</h2>
+      <p>
+        The search covers registration number, owner name, make and model. Try a
+        shorter fragment &mdash; matching is partial and case-insensitive.
+      </p>
+      <a class="btn btn-quiet" href="{% url 'assessment:history' %}">Show all records</a>
+    {% else %}
+      <h2>No inspections yet</h2>
+      <p>
+        Enter the owner and vehicle details, photograph the damage from the angles
+        that show it, and the system will segment each damaged region, grade it and
+        produce one itemised estimate. The record will appear here.
+      </p>
+      <a class="btn btn-signal" href="{% url 'assessment:upload' %}">Run the first inspection</a>
+    {% endif %}
+  </div>
+</section>
+{% endif %}
+
+{% endblock %}

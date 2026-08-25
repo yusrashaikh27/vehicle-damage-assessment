@@ -1,0 +1,279 @@
+{% extends "base.html" %}
+{% comment %}
+Stage 1 of the report's methodology: image acquisition.
+
+Three things are collected, in the order a workshop would ask for them: who owns
+the car, what the car is, and photographs of the damage from each angle.
+
+The owner and vehicle details are asked rather than inferred because the model
+cannot supply them. Segment sets the part prices and the labour rate, and the
+panel in each photograph sets which part is being priced - no class in the
+training data names a component, so guessing it would make the estimate
+untraceable.
+
+The walk-around offers all ten angles and requires none of them individually,
+only that at least one photograph arrives. See assessment/forms.py for why
+demanding all ten would be worse than asking for what applies.
+{% endcomment %}
+
+{% block title %}New inspection &middot; Vehicle Damage Assessment{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div>
+    <span class="eyebrow">Stage 1 &mdash; owner, vehicle and photographs</span>
+    <h1>New damage inspection</h1>
+    <p>
+      Enter the owner and vehicle details, then photograph the damage from as many
+      angles as apply. The system segments each damaged region, grades it from the
+      area it covers, and returns one itemised repair estimate with GST at
+      {{ gst_percent|floatformat:0 }}%.
+    </p>
+  </div>
+  <a class="btn btn-quiet" href="{% url 'assessment:history' %}">View past records</a>
+</div>
+
+{# enctype is what makes the files actually arrive. Without it the browser posts #}
+{# only the filenames and Django reports every image field as empty.            #}
+<form method="post" enctype="multipart/form-data" novalidate class="result-grid">
+  {% csrf_token %}
+
+  <div class="stack">
+    {% if form.errors or formset.non_form_errors or formset.errors %}
+    <div class="form-error-summary" role="alert">
+      <p>
+        The inspection was not submitted. Some entries need attention &mdash; the
+        messages are next to the fields they apply to.
+      </p>
+      {% if formset.non_form_errors %}
+      <ul class="errorlist">
+        {% for error in formset.non_form_errors %}<li>{{ error }}</li>{% endfor %}
+      </ul>
+      {% endif %}
+    </div>
+    {% endif %}
+
+    <section class="card">
+      <div class="card-head">
+        <h2>Owner details</h2>
+        <span class="hint">Recorded on the estimate as issued</span>
+      </div>
+      <div class="card-body">
+        <div class="form-grid">
+          {% include "assessment/_field.html" with field=form.owner_name wide=True %}
+          {% include "assessment/_field.html" with field=form.owner_phone %}
+          {% include "assessment/_field.html" with field=form.owner_email %}
+        </div>
+      </div>
+    </section>
+
+    <section class="card">
+      <div class="card-head">
+        <h2>Vehicle details</h2>
+        <span class="hint">Segment sets the rate card</span>
+      </div>
+      <div class="card-body">
+        <div class="form-grid">
+          {% include "assessment/_field.html" with field=form.registration_number %}
+          {% include "assessment/_field.html" with field=form.vehicle_year %}
+          {% include "assessment/_field.html" with field=form.vehicle_make %}
+          {% include "assessment/_field.html" with field=form.vehicle_model %}
+          {% include "assessment/_field.html" with field=form.segment wide=True %}
+        </div>
+      </div>
+    </section>
+
+    <section class="card">
+      <div class="card-head">
+        <h2>Damage photographs</h2>
+        <span class="shot-tally" id="tally" hidden>
+          <b id="tally-count">0</b> of {{ formset.forms|length }} angles added
+        </span>
+      </div>
+      <div class="card-body">
+        <p class="note">
+          Fill in the angles that show damage &mdash; one photograph is enough to
+          get an estimate, and more angles make it more accurate. For each shot,
+          check that the part named underneath matches what is actually in the
+          frame, because that is what sets the part price.
+        </p>
+
+        {# The management form carries the form count and is not optional: #}
+        {# without it Django cannot tell how many slots were submitted.    #}
+        {{ formset.management_form }}
+
+        <div class="shots" id="shots">
+          {% for slot in formset.forms %}
+          <div class="shot{% if slot.angle_key == 'closeup' %} recommended{% endif %}"
+               data-shot>
+            <div class="shot-head">
+              <b>{{ slot.angle_label }}</b>
+              {% if slot.angle_key == 'closeup' %}<span class="tag">Best single shot</span>{% endif %}
+            </div>
+
+            <p class="hint">{{ slot.angle_hint }}</p>
+
+            {# Loops the hidden fields rather than naming them: the angle, the #}
+            {# row id and the parent key are all hidden, and forgetting one    #}
+            {# would break the formset in a way no error message explains.     #}
+            {% for hidden in slot.hidden_fields %}{{ hidden }}{% endfor %}
+
+            {{ slot.image }}
+
+            <label class="shot-panel">
+              <span>{{ slot.panel.label }}</span>
+              {{ slot.panel }}
+            </label>
+
+            <div class="shot-thumb">
+              <img alt="" data-thumb>
+              <small data-name></small>
+            </div>
+
+            {{ slot.image.errors }}
+            {{ slot.panel.errors }}
+          </div>
+          {% endfor %}
+        </div>
+
+        <div class="form-actions">
+          <button type="submit" class="btn btn-signal">Run assessment</button>
+          <span class="note">
+            Every photograph is assessed, then priced once together &mdash; roughly
+            a second or two per angle.
+          </span>
+        </div>
+      </div>
+    </section>
+  </div>
+
+  <aside class="card">
+    <div class="card-head">
+      <h2>How the estimate is built</h2>
+    </div>
+    <div class="card-body">
+      <ol class="method">
+        <li>
+          <div>
+            <b>Segment the damage</b>
+            A YOLO11 segmentation model returns a pixel mask for each damaged
+            region in every photograph, with its class and confidence.
+          </div>
+        </li>
+        <li>
+          <div>
+            <b>Measure the area</b>
+            Each mask is rasterised and its filled pixels counted, then expressed
+            as a fraction of the vehicle area in that frame.
+          </div>
+        </li>
+        <li>
+          <div>
+            <b>Grade the severity</b>
+            The fraction is compared against two published thresholds per damage
+            class to give minor, moderate or severe.
+          </div>
+        </li>
+        <li>
+          <div>
+            <b>Price once, across all angles</b>
+            Damage of the same type on the same part is merged before pricing, so
+            a bumper photographed from two sides is bought once, not twice.
+          </div>
+        </li>
+      </ol>
+
+      <div class="callout" style="margin-top:18px">
+        <p>
+          <b>Severity is computed, not predicted.</b> The training data carries no
+          severity labels, so grading it with the network would mean inventing a
+          ground truth. Instead the thresholds are documented and the measured
+          area is shown against them on every result, so any verdict can be
+          checked by hand.
+        </p>
+      </div>
+
+      <div class="callout" style="margin-top:14px">
+        <p>
+          <b>Why more angles help.</b> Area is measured against what is visible in
+          the frame, so a dent filling a close-up grades higher than the same dent
+          in a photograph of the whole car. Several angles give the estimate more
+          than one measurement to work from, and each one is listed separately on
+          the result so you can see which shot produced which figure.
+        </p>
+      </div>
+    </div>
+  </aside>
+</form>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  /* Marks a slot as filled, shows a thumbnail, and keeps the tally honest.
+
+     Progressive enhancement only: the form works identically with JavaScript
+     off, because the server does every check. One delegated listener on the
+     container rather than ten per-input handlers - the slots are known only by
+     their position, so binding by id would mean generating ten scripts.
+
+     createObjectURL reads the file locally; nothing is uploaded until submit,
+     and each URL is revoked when it is replaced so the page does not leak
+     object URLs as the user swaps photographs. */
+  (function () {
+    var container = document.getElementById("shots");
+    var tally = document.getElementById("tally");
+    var count = document.getElementById("tally-count");
+    if (!container) return;
+
+    if (tally) tally.hidden = false;
+
+    function retally() {
+      if (!count) return;
+      count.textContent = container.querySelectorAll("[data-shot].filled").length;
+    }
+
+    container.addEventListener("change", function (event) {
+      var input = event.target;
+      if (!input || input.type !== "file") return;
+
+      var shot = input.closest("[data-shot]");
+      if (!shot) return;
+
+      var thumb = shot.querySelector("[data-thumb]");
+      var name = shot.querySelector("[data-name]");
+
+      if (thumb && thumb.dataset.url) {
+        URL.revokeObjectURL(thumb.dataset.url);
+        delete thumb.dataset.url;
+      }
+
+      var file = input.files && input.files[0];
+      if (!file) {
+        shot.classList.remove("filled");
+        if (thumb) thumb.removeAttribute("src");
+        retally();
+        return;
+      }
+
+      var url = URL.createObjectURL(file);
+      if (thumb) {
+        thumb.src = url;
+        thumb.dataset.url = url;
+      }
+      if (name) {
+        name.textContent = file.name + " (" + Math.round(file.size / 1024) + " KB)";
+      }
+      shot.classList.add("filled");
+      retally();
+    });
+
+    /* A rejected submission comes back with the files cleared by the browser but
+       the errors shown, so mark any slot carrying an error as needing attention
+       rather than leaving it looking untouched. */
+    container.querySelectorAll("[data-shot]").forEach(function (shot) {
+      if (shot.querySelector(".errorlist")) shot.classList.add("filled");
+    });
+    retally();
+  })();
+</script>
+{% endblock %}

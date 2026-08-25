@@ -1,0 +1,40 @@
+# Data and model artefacts - far too large for git, and all reproducible.
+#   Detection.v1-cardd.yolov11/  388 MB  the raw Roboflow export (re-downloadable)
+#   dataset/                     384 MB  regenerate with: python tools/prepare_dataset.py
+#   dataset.zip                  344 MB  regenerate by re-zipping dataset/
+Detection.v1-cardd.yolov11/
+dataset/
+dataset.zip
+weights/
+runs/
+
+# Sample photographs picked out of dataset/images/test for manual testing.
+# Derived from the excluded Roboflow export, and reproducible in seconds by
+# picking any image from dataset/images/test - so there is nothing to gain from
+# committing them. sample_uploads/README.md is kept, because it documents the
+# test runs and the numbers they should produce.
+sample_uploads/*
+!sample_uploads/README.md
+
+# Environment
+venv/
+__pycache__/
+*.pyc
+
+# Django
+# SQLite writes two sidecar files alongside the database in write-ahead-log mode.
+# They hold committed-but-not-yet-checkpointed pages, so committing them would
+# put a fragment of one machine's database into everyone else's checkout.
+db.sqlite3
+db.sqlite3-wal
+db.sqlite3-shm
+media/
+staticfiles/
+.env
+
+# macOS
+.DS_Store
+
+# Left behind when a file is deleted while a FUSE mount still has it open.
+# Nothing to do with the project, and the name changes every time.
+.fuse_hidden*

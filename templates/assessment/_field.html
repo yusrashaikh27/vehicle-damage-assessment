@@ -1,0 +1,12 @@
+{% comment %}
+One form field. Extracted so the six fields on the upload form cannot drift
+apart in markup, and so the label / help text / error order is decided once.
+{% endcomment %}
+<div class="field{% if wide %} span-2{% endif %}">
+  <label for="{{ field.id_for_label }}">
+    {{ field.label }}{% if field.field.required %} <span class="req" title="Required">*</span>{% endif %}
+  </label>
+  {{ field }}
+  {% if field.help_text %}<span class="helptext">{{ field.help_text }}</span>{% endif %}
+  {{ field.errors }}
+</div>

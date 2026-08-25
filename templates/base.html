@@ -1,0 +1,88 @@
+{% load static %}<!doctype html>
+{% comment %}
+Base template. Three things live here rather than in each page:
+
+* the stub-detector warning, so no page can forget it;
+* the message list, so every view can use django.contrib.messages;
+* the provenance footer, so the rate card behind every figure on the site is
+  named on the page showing the figure.
+{% endcomment %}
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}Vehicle Damage Assessment{% endblock %}</title>
+  <meta name="description" content="Detects external vehicle damage from a photograph, grades its severity from measured area, and produces an itemised repair cost estimate.">
+  <link rel="stylesheet" href="{% static 'css/app.css' %}">
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+
+<header class="masthead">
+  <div class="wrap masthead-inner">
+    <a class="brand" href="{% url 'assessment:upload' %}">
+      <span class="brand-mark">VDA</span>
+      <span class="brand-text">
+        Vehicle Damage Assessment
+        <em>Detection, severity grading and cost estimation</em>
+      </span>
+    </a>
+    {% with here=request.resolver_match.url_name %}
+    <nav aria-label="Main">
+      <a href="{% url 'assessment:upload' %}" {% if here == 'upload' %}aria-current="page"{% endif %}>New inspection</a>
+      <a href="{% url 'assessment:history' %}" {% if here == 'history' or here == 'result' %}aria-current="page"{% endif %}>Records</a>
+      <a href="/api/inspections/">API</a>
+      <a href="/admin/">Admin</a>
+    </nav>
+    {% endwith %}
+  </div>
+</header>
+
+{% if detector.using_stub %}
+{# Deliberately loud. The stub detector returns fixed, invented regions; a demo
+   that showed those without saying so would be presenting fabricated results. #}
+<div class="notice-stub" role="alert">
+  <div class="wrap notice-stub-body">
+    <strong>No trained model</strong>
+    <p>
+      Trained weights were not found at <code>{{ detector.weights_path }}</code>, so a
+      placeholder detector is running. Detections and costs shown anywhere on this
+      site are <b>illustrative only</b> until <code>best.pt</code> is copied to that
+      path. Records created now are flagged, and can be reassessed from the admin
+      once the real weights are in place.
+    </p>
+  </div>
+</div>
+{% endif %}
+
+<main id="main">
+  <div class="wrap">
+    {% if messages %}
+    <ul class="messages">
+      {% for message in messages %}
+      <li class="{{ message.tags }}">{{ message }}</li>
+      {% endfor %}
+    </ul>
+    {% endif %}
+
+    {% block content %}{% endblock %}
+  </div>
+</main>
+
+<footer class="site">
+  <div class="wrap">
+    <p>
+      Intelligent Vehicle External Damage Assessment and Cost Estimator &mdash;
+      YOLO11 instance segmentation, rule-based severity grading, itemised estimate.
+    </p>
+    <p>
+      Estimates are indicative and computed from a fixed reference rate card; they
+      are not a garage quotation. Severity is derived from measured mask area
+      against documented thresholds, not predicted by the model.
+    </p>
+  </div>
+</footer>
+
+{% block scripts %}{% endblock %}
+</body>
+</html>

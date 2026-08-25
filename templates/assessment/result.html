@@ -1,0 +1,378 @@
+{% extends "base.html" %}
+{% load money %}
+{% comment %}
+The result docket. Everything on this page came out of `core/` and was persisted
+by `services.run_assessment`; the view only carried it here.
+
+The page is organised around one fact about the measurement: an area fraction is
+measured against a single frame. So detections are grouped by the photograph they
+came from, each group states its own denominator, and the quotation - which is
+computed across all frames at once - sits in its own section below them.
+
+Note the `u` suffix on every floatformat used inside a style attribute -
+`floatformat:"2u"` forces unlocalized output. Under a locale that writes decimals
+with a comma, plain floatformat would emit `width: 43,2%`, which is invalid CSS
+and would silently collapse the meter.
+{% endcomment %}
+
+{% block title %}{{ inspection.docket_number }} &middot; Assessment{% endblock %}
+
+{% block content %}
+
+<div class="docket">
+  <div class="docket-id">
+    <span class="eyebrow">Assessment docket</span>
+    <h1>{{ inspection.docket_number }}</h1>
+    <p>
+      Raised {{ inspection.created_at|date:"j M Y, g:i a" }} &middot;
+      {{ inspection.get_status_display }}
+      {% if inspection.is_stub %}&middot; <span class="chip chip-stub">Placeholder model</span>{% endif %}
+    </p>
+  </div>
+  <div class="docket-actions">
+    {% if inspection.status == "complete" %}
+    <a class="btn btn-signal" href="{% url 'assessment:download_report' inspection.pk %}">Download PDF report</a>
+    {% endif %}
+    <a class="btn btn-quiet" href="{% url 'assessment:upload' %}">New inspection</a>
+    <a class="btn btn-quiet" href="{% url 'assessment:history' %}">Records</a>
+  </div>
+</div>
+
+{% if inspection.status == "failed" %}
+<div class="callout danger" style="margin-bottom:24px" role="alert">
+  <p><b>This assessment did not complete.</b></p>
+  <p>{{ inspection.error_message|default:"No error detail was recorded." }}</p>
+  <p>
+    The record and every uploaded photograph were kept. Once the cause is fixed, run
+    <b>Re-run assessment</b> on this record from the admin rather than re-uploading,
+    so the docket number stays the same.
+  </p>
+</div>
+{% endif %}
+
+<div class="result-grid">
+  {# ------------------------------------------------------- contact sheet #}
+  <div class="plates">
+    {% for entry in views %}
+    <figure class="plate" style="margin:0">
+      {% if entry.view.display_image %}
+        <img src="{{ entry.view.display_image.url }}"
+             alt="{{ entry.view.get_angle_display }} view of the vehicle{% if entry.view.annotated_image %}, with each detected damaged region outlined and labelled{% endif %}.">
+      {% endif %}
+      <figcaption class="plate-caption">
+        <b>{{ entry.view.get_angle_display }}</b> &middot; {{ entry.view.get_panel_display }}<br>
+        {% if entry.detections %}
+          {{ entry.detections|length }} region{{ entry.detections|length|pluralize }} outlined; the
+          area inside each outline is what the severity grade was measured from.
+        {% else %}
+          Nothing detected in this frame.
+        {% endif %}
+      </figcaption>
+    </figure>
+    {% empty %}
+    <p class="note">No photographs are attached to this record.</p>
+    {% endfor %}
+  </div>
+
+  {# ------------------------------------------------------------- summary #}
+  <aside class="card">
+    <div class="card-head">
+      <h2>Summary</h2>
+    </div>
+    <div class="card-body">
+      <dl class="slab">
+        <dt>Owner</dt>
+        <dd>{{ inspection.owner_name }}</dd>
+        <dt>Contact</dt>
+        <dd>{{ inspection.owner_phone }}</dd>
+        <dt>Vehicle</dt>
+        <dd>{{ inspection.vehicle_description }}</dd>
+        <dt>Registration</dt>
+        <dd>{{ inspection.registration_number }}</dd>
+        <dt>Segment</dt>
+        <dd>{{ inspection.get_segment_display }}</dd>
+        <dt>Photographs</dt>
+        <dd>{{ inspection.view_count }}</dd>
+        <dt>Parts assessed</dt>
+        <dd>
+          {% for panel in inspection.panels_assessed %}
+            {{ panel }}{% if not forloop.last %}, {% endif %}
+          {% empty %}&mdash;{% endfor %}
+        </dd>
+        <dt>Regions found</dt>
+        <dd>{{ inspection.damage_count }}</dd>
+        <dt>Worst severity</dt>
+        <dd>
+          <span class="chip {% if inspection.overall_severity %}chip-{{ inspection.overall_severity }}{% else %}chip-none{% endif %}">
+            {{ inspection.get_overall_severity_display|default:"None" }}
+          </span>
+        </dd>
+      </dl>
+
+      <div class="headline">
+        <span class="label">Estimated payable</span>
+        <span class="figure">{{ inspection.total|rupees }}</span>
+        <span class="figure-note">
+          Includes GST at {{ gst_percent|floatformat:0 }}%. Indicative estimate from a
+          fixed reference rate card, not a garage quotation.
+        </span>
+      </div>
+    </div>
+  </aside>
+</div>
+
+{# ------------------------------------------------------------- detections #}
+<section class="card" style="margin-bottom:24px">
+  <div class="card-head">
+    <h2>Damage detected</h2>
+    <span class="hint">
+      {{ inspection.damage_count }} region{{ inspection.damage_count|pluralize }} across
+      {{ inspection.view_count }} photograph{{ inspection.view_count|pluralize }} &middot;
+      severity graded from measured area
+    </span>
+  </div>
+
+  {% if multi_view %}
+  <div class="card-body" style="border-bottom:1px solid var(--rule)">
+    <p class="note" style="margin:0">
+      Every region found in every frame is listed here, grouped by the photograph
+      it came from. The percentages within one group share a denominator &mdash; the
+      vehicle area visible in that frame &mdash; and percentages from different
+      groups are not comparable, which is why they are not put in one table. The
+      estimate below is not the sum of these rows: damage of the same type on the
+      same part is merged first, because the same dent seen from two angles is one
+      dent.
+    </p>
+  </div>
+  {% endif %}
+
+  {% for entry in views %}
+  <div class="viewblock">
+    <div class="viewblock-head">
+      {% if entry.view.display_image %}
+      <img src="{{ entry.view.display_image.url }}" alt="">
+      {% endif %}
+      <div>
+        <h3>{{ entry.view.get_angle_display }} &middot; {{ entry.view.get_panel_display }}</h3>
+        <p class="frame-meta">
+          {% if entry.view.image_width %}
+            Frame <code>{{ entry.view.image_width }}&times;{{ entry.view.image_height }}</code> px
+            &middot; vehicle area measured as
+            <code>{{ entry.view.reference_area_px|floatformat:0 }}</code> px
+          {% else %}
+            No measurement was recorded for this frame.
+          {% endif %}
+          {% if entry.view.processing_ms %}&middot; {{ entry.view.processing_ms }} ms{% endif %}
+        </p>
+      </div>
+    </div>
+
+    {% if entry.rows %}
+    <div class="table-scroll">
+      <table class="data">
+        <caption>
+          Area is the region's mask, in filled pixels, as a fraction of the vehicle
+          area visible in this frame. Confidence is the model's own score for the
+          detection and plays no part in the severity grade.
+        </caption>
+        <thead>
+          <tr>
+            <th scope="col">#</th>
+            <th scope="col">Damage</th>
+            <th scope="col">Severity</th>
+            <th scope="col" class="num">Area</th>
+            <th scope="col" class="num">Conf.</th>
+            <th scope="col" style="width:38%">Measured against the rule</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for item in entry.rows %}
+          {% with det=item.detection %}
+          <tr>
+            <td class="num">{{ forloop.counter }}</td>
+            <td>
+              <b>{{ det.get_class_name_display }}</b>
+              {% if det.reason %}<span class="rowmeta">{{ det.reason }}</span>{% endif %}
+            </td>
+            <td>
+              <span class="chip chip-{{ det.severity }}">{{ det.get_severity_display }}</span>
+            </td>
+            <td class="num">{{ det.area_percent|floatformat:2 }}%</td>
+            <td class="num">{{ det.confidence|floatformat:2 }}</td>
+            <td>
+              {# The signature element: the measurement drawn against the two
+                 thresholds that produced the verdict, so the grade can be
+                 checked rather than trusted. #}
+              <div class="meter">
+                <div class="meter-track" role="img"
+                     aria-label="Measured area {{ det.area_percent|floatformat:2 }} percent, graded {{ det.get_severity_display }}{% if item.minor_max_pct %}; minor up to {{ item.minor_max_pct|floatformat:2 }} percent, moderate up to {{ item.moderate_max_pct|floatformat:2 }} percent, severe above that{% endif %}.">
+                  <span class="meter-zone zone-minor" style="left:0; width:{{ item.minor_width|floatformat:"3u" }}%"></span>
+                  <span class="meter-zone zone-moderate" style="left:{{ item.moderate_left|floatformat:"3u" }}%; width:{{ item.moderate_width|floatformat:"3u" }}%"></span>
+                  <span class="meter-zone zone-severe" style="left:{{ item.severe_left|floatformat:"3u" }}%; width:{{ item.severe_width|floatformat:"3u" }}%"></span>
+                  <span class="meter-mark is-{{ det.severity }}" style="left:{{ item.value_pct|floatformat:"3u" }}%"></span>
+                </div>
+                {% if item.minor_max_pct %}
+                <div class="meter-scale">
+                  <span>minor &le;{{ item.minor_max_pct|floatformat:2 }}%</span>
+                  <span>moderate &le;{{ item.moderate_max_pct|floatformat:2 }}%</span>
+                  <span>severe &gt;</span>
+                </div>
+                {% endif %}
+                {% if item.note %}<p class="meter-rule">{{ item.note }}</p>{% endif %}
+              </div>
+            </td>
+          </tr>
+          {% endwith %}
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% else %}
+    <p class="viewblock-empty">
+      No damage was detected in this frame above the confidence threshold.
+    </p>
+    {% endif %}
+  </div>
+  {% endfor %}
+
+  {% if not inspection.damage_count %}
+  <div class="card-body">
+    <p class="note" style="margin:0">
+      No damage was detected in any photograph above the confidence threshold. That
+      is a result, not an error &mdash; but on photographs that clearly show damage it
+      usually means the region was too small in frame, or the part filled too little
+      of the image. Try a closer photograph of the same area.
+    </p>
+  </div>
+  {% endif %}
+</section>
+
+{# -------------------------------------------------------------- quotation #}
+<section class="card" style="margin-bottom:24px">
+  <div class="card-head">
+    <h2>Repair cost estimate</h2>
+    <span class="hint">{{ cost_source }}</span>
+  </div>
+
+  {% if cost_lines %}
+  <div class="table-scroll">
+    <table class="data">
+      <caption>
+        One line per repair action. Where several regions share an action, the
+        additional ones are charged at a reduced rate rather than in full &mdash;
+        a second dent on the same panel does not cost a second panel.{% if multi_view %}
+        Across photographs, damage of the same type on the same part is counted
+        once at its highest observed count, because two overlapping views of one
+        dent cannot be told apart from two separate dents.{% endif %}
+      </caption>
+      <thead>
+        <tr>
+          <th scope="col">Damage</th>
+          <th scope="col">Severity</th>
+          <th scope="col">Action</th>
+          <th scope="col">Component</th>
+          <th scope="col" class="num">Qty</th>
+          <th scope="col" class="num">Hours</th>
+          <th scope="col" class="num">Parts</th>
+          <th scope="col" class="num">Labour</th>
+          <th scope="col" class="num">Paint</th>
+          <th scope="col" class="num">Line total</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for line in cost_lines %}
+        <tr>
+          <td>{{ line.get_class_name_display }}</td>
+          <td><span class="chip chip-{{ line.severity }}">{{ line.get_severity_display }}</span></td>
+          <td>{{ line.action }}</td>
+          <td>{{ line.get_component_display }}</td>
+          <td class="num">{{ line.instances }}</td>
+          <td class="num">{{ line.labour_hours|floatformat:2 }}</td>
+          <td class="num">{{ line.part_cost|rupees }}</td>
+          <td class="num">{{ line.labour_cost|rupees }}</td>
+          <td class="num">{{ line.paint_cost|rupees }}</td>
+          <td class="num strong">{{ line.subtotal|rupees }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  <div class="card-body">
+    <table class="totals">
+      <tbody>
+        <tr><th scope="row">Parts</th><td>{{ inspection.parts_total|rupees }}</td></tr>
+        <tr><th scope="row">Labour</th><td>{{ inspection.labour_total|rupees }}</td></tr>
+        <tr><th scope="row">Paint and materials</th><td>{{ inspection.paint_total|rupees }}</td></tr>
+        <tr class="rule-above"><th scope="row">Subtotal</th><td>{{ inspection.subtotal|rupees }}</td></tr>
+        <tr><th scope="row">GST @ {{ gst_percent|floatformat:0 }}%</th><td>{{ inspection.gst_amount|rupees }}</td></tr>
+        <tr class="payable"><th scope="row">Estimated payable</th><td>{{ inspection.total|rupees }}</td></tr>
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <div class="card-body">
+    <p class="note" style="margin:0">
+      Nothing to price &mdash; no damage was detected on these photographs.
+    </p>
+  </div>
+  {% endif %}
+</section>
+
+{# ------------------------------------------------------------------ notes #}
+{% if inspection.notes %}
+<section class="card" style="margin-bottom:24px">
+  <div class="card-head">
+    <h2>Notes on this estimate</h2>
+    <span class="hint">Generated by the cost model, not entered by hand</span>
+  </div>
+  <div class="card-body">
+    <ul class="notes">
+      {% for note in inspection.notes %}<li>{{ note }}</li>{% endfor %}
+    </ul>
+  </div>
+</section>
+{% endif %}
+
+{# ------------------------------------------------------------- provenance #}
+<section class="card">
+  <div class="card-head">
+    <h2>Provenance</h2>
+    <span class="hint">Where these numbers came from</span>
+  </div>
+  <div class="card-body">
+    {# Frame sizes and reference areas are per photograph, so they are shown with
+       the photograph they belong to, above. What is left here is what applies to
+       the record as a whole. #}
+    <dl class="slab" style="max-width:520px">
+      <dt>Model</dt>
+      <dd>
+        {{ inspection.model_name|default:"—" }}
+        {% if inspection.is_stub %}<br><span class="chip chip-stub">Placeholder</span>{% endif %}
+      </dd>
+      <dt>Photographs assessed</dt>
+      <dd>{{ inspection.view_count }}</dd>
+      <dt>Processing time</dt>
+      <dd>
+        {% if inspection.processing_ms %}{{ inspection.processing_ms }} ms
+          {% if multi_view %}<br><span class="rowmeta">All photographs, including the pricing pass</span>{% endif %}
+        {% else %}&mdash;{% endif %}
+      </dd>
+      <dt>Rate card</dt>
+      <dd style="text-align:left">{{ cost_source }}</dd>
+    </dl>
+
+    {% if inspection.is_stub %}
+    <div class="callout danger" style="margin-top:16px">
+      <p>
+        <b>These figures are illustrative.</b> They were produced by the placeholder
+        detector, which returns fixed regions regardless of the photograph. Once
+        <code>best.pt</code> is installed, re-run this record from the admin to
+        replace them with a real assessment.
+      </p>
+    </div>
+    {% endif %}
+  </div>
+</section>
+
+{% endblock %}
