@@ -50,20 +50,25 @@ Two claims in the report that the *data* cannot support, and what to do:
 
 ## Week 1 (22–28 Aug) — data, environment, training, skeleton
 
-- [x] **Dataset repaired.** `tools/prepare_dataset.py` → `dataset/`: 9,883
-      images, 21,415 instances, 7 classes, splits provably free of duplicate
-      photographs. Findings in `docs/DATASET_NOTES.md`.
-- [ ] **Rebuild the venv on Python 3.12.** The existing one is 3.14.6; torch and
-      ultralytics wheels don't reliably support it yet.
+- [x] **Dataset repaired.** `tools/prepare_dataset.py` → `dataset/`: 3,933
+      images, 8,628 instances, 7 classes, splits provably free of duplicate
+      photographs — verified 31 Aug 2026, with three leak assertions the script
+      refuses to pass without. The first repair was not enough: the export's
+      10,000 files are 3,933 photographs augmented 2–3 times, and 81.5% of the
+      test split was a copy of a train photograph. Findings in
+      `docs/DATASET_NOTES.md`.
+- [x] **Rebuild the venv on Python 3.12.** Done — `venv/` is 3.12.10.
 - [ ] **Zip `dataset/` to Drive and start training** `yolo11s-seg`, 640 px,
       ~80 epochs, checkpointing to Drive so a Colab disconnect can resume.
-- [ ] **Django skeleton**: project, `Inspection` and `Detection` models, upload
+      `dataset.zip` is rebuilt and clean (147 MB). **This is now the only thing
+      on the critical path.**
+- [x] **Django skeleton**: project, `Inspection` and `Detection` models, upload
       view, media handling, admin registration. Runs end to end against a
-      stock pretrained model so the plumbing is proven before real weights land.
+      stub detector, so the plumbing is proven before real weights land.
 
 ## Week 2 (29 Aug – 4 Sep) — the three modules that are actually yours
 
-- [ ] **Severity from mask area.** The dataset has no severity labels, so
+- [x] **Severity from mask area.** The dataset has no severity labels, so
       severity cannot be learned from it. It is computed: the polygon area of
       each detection as a fraction of the image, banded into Minor / Moderate /
       Severe with per-class thresholds (a shattered windscreen is never
@@ -71,19 +76,23 @@ Two claims in the report that the *data* cannot support, and what to do:
       config dict, documented, so the rule is inspectable rather than magic.
       **Be upfront that this is a documented heuristic, not a trained
       classifier** — claiming otherwise is the kind of thing a viva finds.
-- [ ] **Cost estimation.** `cost = part_cost(panel, vehicle_segment) ×
+      Built in `core/severity.py`.
+- [x] **Cost estimation.** `cost = part_cost(panel, vehicle_segment) ×
       replace_fraction(damage_class, severity) + labour_rate × hours(damage_class,
       severity)`, driven by a rate table you can cite a source for. This is
-      exactly why the classes were merged by repair action.
-- [ ] **Report generation.** PDF with the annotated image, per-damage table
-      (type, severity, panel, cost line), and total. Objective 4.
+      exactly why the classes were merged by repair action. Built in `core/cost.py`,
+      with a 155-case regression baseline in `tests/`.
+- [x] **Report generation.** PDF with the annotated image, per-damage table
+      (type, severity, panel, cost line), and total. Objective 4. Built in
+      `core/report.py`.
 - [ ] **Retrain** with whatever the first run's confusion matrix suggests.
 
 ## Week 3 (5–11 Sep) — evidence and defence
 
 - [ ] **Evaluation on the held-out test split**: mAP50, mAP50-95, per-class AP,
       confusion matrix, precision/recall. These are the numbers that go in the
-      report, and they are honest because the split is clean.
+      report, and they are honest because the split is clean. Report `tire_flat`
+      AP as a range or with a caveat — it has only 32 test instances.
 - [ ] **Limitations section**: cars only, severity is a heuristic, cost table is
       indicative, single-view images.
 - [ ] **Viva preparation**: for each design decision, the alternative that was
@@ -104,3 +113,20 @@ Objective 2 names **YOLOv5s**. We use **YOLO11-seg** instead, for a reason worth
 stating in the viva: the annotations are polygons, and polygons give an area,
 which is what makes objective 3's severity assessment possible without severity
 labels. Update that line in the report to say YOLO11.
+
+## Edits the written report needs
+
+Checked against `final report2.pdf` on 30 Aug 2026:
+
+1. **Objective 2 says "YOLOv5s"** → YOLO11-seg, for the reason above.
+2. **The Methodology section says "bounding boxes"** → segmentation polygons. This
+   one matters more than a name change: the whole severity module depends on
+   polygon *area*, and a bounding box has no area you can trust — a diagonal
+   scratch fills maybe 15% of its box. If the report says boxes, objective 3 does
+   not follow from objective 2.
+3. **The Abstract promises "two-wheelers and four-wheelers"** → CarDD is cars only.
+   Drop it or state it as a limitation.
+4. **No accuracy figure for this system exists yet, and none should be written
+   until training finishes.** The 92.5% / 98.5% / 94% figures in the report are
+   Literature Survey numbers belonging to other papers — make sure the surrounding
+   text cannot be read as claiming them for this system.

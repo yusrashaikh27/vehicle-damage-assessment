@@ -7,23 +7,22 @@ Everything below assumes you are in the project folder:
 ## First time only
 
     source venv/bin/activate
-    python manage.py makemigrations assessment
     python manage.py migrate
     python manage.py createsuperuser
 
-`makemigrations` then `migrate` is two steps, not one, and it is worth knowing
-why: the first *writes* a Python file describing the tables
-(`assessment/migrations/0001_initial.py`), the second *executes* it against
-SQLite. The written file is committed to the repo, which is what lets the same
-schema be rebuilt on any machine without anyone re-typing it.
+`migrate` alone is enough. `assessment/migrations/0001_initial.py` already exists
+and is committed, so there is nothing to generate — it describes the four-model
+shape (Inspection, VehicleImage, DamageDetection, CostLine) and `migrate` executes
+it against SQLite.
 
-There is no database yet and `assessment/migrations/` holds only `__init__.py`,
-so `0001_initial` will be generated fresh for the current four-model shape —
-Inspection, VehicleImage, DamageDetection, CostLine. Nothing to migrate away
-from.
+You only need `makemigrations assessment` **after changing a model field**. It
+writes a new migration file describing the change; `migrate` then applies it. The
+two steps are separate on purpose: the written file is committed, which is what
+lets the same schema be rebuilt on any machine without anyone re-typing it.
 
 `createsuperuser` is the login for `/admin/`. Any username and password will do;
-the password prompt stays blank as you type, which is normal.
+the password prompt stays blank as you type, which is normal. If `db.sqlite3`
+already has a superuser from an earlier session, you can skip this.
 
 ## Every time after that
 

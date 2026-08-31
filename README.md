@@ -12,13 +12,13 @@ and a Django REST Framework API. Final-year BE major project, VTU.
 
 ## Start here: you need the dataset, and it is not in this repository
 
-Four things are excluded by `.gitignore` because they total about 2.1 GB:
+Four things are excluded by `.gitignore` because they total about 1.9 GB:
 
 | Path | Size | How to get it |
 | --- | --- | --- |
 | `Detection.v1-cardd.yolov11/` | 388 MB | Re-download the export from Roboflow |
-| `dataset/` | 384 MB | `python tools/prepare_dataset.py` |
-| `dataset.zip` | 345 MB | `cd dataset && zip -r ../dataset.zip .` |
+| `dataset/` | 171 MB | `python tools/prepare_dataset.py` |
+| `dataset.zip` | 147 MB | `cd dataset && zip -r ../dataset.zip .` |
 | `venv/` | 1.2 GB | `python3.12 -m venv venv` (see below) |
 
 **The app runs without any of them.** You only need the dataset to retrain the
@@ -56,6 +56,17 @@ looks like the server failed to start when it is running perfectly.
 
 `migrate` is enough on a fresh clone; `0001_initial.py` is committed, so nobody
 needs to re-generate the schema.
+
+## Training
+
+Training runs in Google Colab on a free T4 GPU, not locally — a MacBook has no
+NVIDIA GPU and CPU training is 20–40x slower. `notebooks/train_colab.ipynb` is
+ready to run; **`docs/TRAINING.md` walks through it step by step**, including what
+every training flag means and what to do if the first run disappoints.
+
+Short version: upload `dataset.zip` to `MyDrive/vda/`, open the notebook in Colab,
+switch the runtime to a T4, run the cells. About 2h20m for 100 epochs (measured, 31 Aug 2026). Then
+drop the resulting `best.pt` into `weights/` and restart the server.
 
 ## The four pages
 
@@ -119,31 +130,49 @@ the part price depends entirely on which panel is damaged, the panel has to come
 from somewhere, and asking is both more honest and more accurate than guessing.
 Each angle pre-selects the component it usually shows, and every one is editable.
 
-## Known issue: do not report an accuracy figure until the split is fixed
+## The train/test leak, and how it was fixed
 
-Measured 2026-08-25, before any training run:
+An earlier version of this README said "do not report an accuracy figure until the
+split is fixed", and estimated the leak at 12.1% of the test split. Both the fix
+and the estimate have now been dealt with — the fix is in, and the estimate was far
+too low.
 
-- **79.4% of `dataset/` is Roboflow augmentation copies**, not distinct
-  photographs. Rotation and shear pad the frame with black, which is how they are
-  detectable. Flip- and brightness-only augmentations leave no padding, so 79.4%
-  is a lower bound.
-- **12.1% of the test split (179 of 1,482 images) is a rotated copy of a
-  photograph in train or valid**, and 11.9% of the validation split likewise.
-  That is a real train/test leak: the deduplication keyed on a perceptual hash
-  distance of ≤64, and a rotation moves that distance to roughly 100 while barely
-  changing the colour histogram, so rotated copies passed straight through.
+The export's 10,000 files are **3,933 photographs**, each augmented 2–3 times by
+Roboflow. Files sharing a filename stem before `_jpg.rf.` are the same photograph.
+The export's own split cut across those families, so:
 
-Any mAP measured on the current split is inflated and must not go in the report.
-The fix belongs in `tools/prepare_dataset.py`, in two parts: exclude augmented
-copies from validation and test, since padded rotations never occur at inference
-anyway (this alone resolves 171 of the 179), and split by augmentation family
-rather than by image, grouping on the filename stem before `.rf.` (needed for the
-remaining 8, which are original photographs whose rotations landed elsewhere).
+| | before | after |
+| --- | --- | --- |
+| test images that are a copy of a train photograph | **1,208 of 1,482 (81.5%)** | **0** |
+| valid likewise | 1,198 of 1,483 (80.8%) | 0 |
+| augmentation families spanning two splits | 48% | 0 |
+| padded rotations in valid/test | ~72% | 0 |
 
-Do **not** try to fix this by merging every file that shares a filename stem.
-98.3% of same-stem pairs are genuinely different photographs — the raw export
-merged several annotation projects with colliding names, and collapsing them
-would discard roughly 6,000 real images. `docs/DATASET_NOTES.md` has the details.
+81.5%, not 12.1%. An mAP measured on the old split would not have been inflated so
+much as meaningless.
+
+`tools/prepare_dataset.py` now splits by cluster rather than by image, keeps
+augmented copies in train only, and refuses to declare success unless all three
+leak assertions pass. Re-run it and it prints the checks; `dataset/` currently
+holds a verified-clean 2,742 / 588 / 603 split with every class within a point of
+70% train. **mAP measured on this split is reportable.**
+
+One caveat to carry into the report: `tire_flat` has only 32 test instances, under
+the 40 the script wants, so its per-class AP will swing between runs. Report it as
+a range or with an explicit caveat. That is a limit of the data — 211 flat-tyre
+instances exist in 3,933 photographs — not a bug in the split.
+
+**The 12.1% figure came from a broken measurement, and so did a second claim that
+was worse.** The old README warned: "do not merge every file that shares a filename
+stem — 98.3% of same-stem pairs are genuinely different photographs". That is
+false, and it pointed away from the actual fix. Both errors came from comparing
+*raw* colour histograms and assuming rotation barely changes one. Rotation adds up
+to 28% pure-black padding, which rewrites the histogram and pushes a
+same-photograph pair below the acceptance threshold, so same-photograph pairs were
+counted as different. Masking near-black pixels first separates the populations
+completely: same-family pairs median 0.87 with none below 0.60, different-family
+pairs median 0.37 with **none above 0.78**. `docs/DATASET_NOTES.md` has the
+measurement, the control group, and the visual spot-check of the ambiguous cases.
 
 ## Layout
 
@@ -158,8 +187,8 @@ core/            assessment logic - no Django imports anywhere
 assessment/      the Django app; services.py is the only bridge to core/
 vdac/            project settings and root URLs
 tests/           five checks, no Django or GPU needed
-tools/           prepare_dataset.py
-docs/            RUNNING.md, DATASET_NOTES.md, PLAN.md
+tools/           prepare_dataset.py, setup_claude_cli.sh
+docs/            RUNNING.md, TRAINING.md, DATASET_NOTES.md, PLAN.md
 notebooks/       train_colab.ipynb - training runs in Colab, not locally
 ```
 

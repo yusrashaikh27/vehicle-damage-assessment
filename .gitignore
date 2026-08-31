@@ -1,11 +1,16 @@
 # Data and model artefacts - far too large for git, and all reproducible.
-#   Detection.v1-cardd.yolov11/  388 MB  the raw Roboflow export (re-downloadable)
-#   dataset/                     384 MB  regenerate with: python tools/prepare_dataset.py
-#   dataset.zip                  344 MB  regenerate by re-zipping dataset/
+#   Detection.v1-cardd.yolov11/  360 MB  the raw Roboflow export (re-downloadable)
+#   dataset/                     160 MB  regenerate with: python tools/prepare_dataset.py
+#   dataset.zip                  154 MB  regenerate by re-zipping dataset/
+# Sizes measured 2026-08-31. dataset/ and dataset.zip were ~384/344 MB before the leak fix,
+# which dropped the export's 10,000 augmented files to 3,933 distinct photographs.
 Detection.v1-cardd.yolov11/
 dataset/
 dataset.zip
-weights/
+# The checkpoint is ~77 MB and regenerable from notebooks/train_colab.ipynb, so it is
+# not tracked - but keep weights/README.md, which says where to put it.
+weights/*
+!weights/README.md
 runs/
 
 # Sample photographs picked out of dataset/images/test for manual testing.
@@ -38,3 +43,4 @@ staticfiles/
 # Left behind when a file is deleted while a FUSE mount still has it open.
 # Nothing to do with the project, and the name changes every time.
 .fuse_hidden*
+weights/

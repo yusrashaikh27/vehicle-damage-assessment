@@ -64,66 +64,147 @@ for p in Path("labels").iterdir():
         ...
 ```
 
-## It is a merge of several annotation projects
+## The 10,000 files are 3,933 photographs, augmented
 
-The export has 10,000 files but only 3,969 distinct filename stems, which looks
-like every photograph was duplicated 2–3 times. It is not.
+The export has 10,000 files but only 3,969 distinct filename stems. Every name
+follows Roboflow's augmentation convention:
 
-Comparing image content instead of names: of a 250-pair sample of same-stem
-files, 97% are **different photographs** (41% do not even share dimensions).
-Filename stems also come in several conventions (`000123`, `8_jpeg`,
-`akhand_b43_2`), which is the giveaway — this is several projects merged, each
-numbering from 1.
+```
+<stem>_jpg.rf.<32 hex characters>.jpg
+```
 
-Two consequences:
+The stem is the source photograph; the hex is one augmented variant of it. So
+files sharing a stem are the **same photograph**, augmented — an "augmentation
+family". Grouping by family and keeping one member per family leaves **3,933
+images**, which is the number that matters for every sample-size claim in the
+report.
 
-- Grouping by filename to "deduplicate" discards ~6,000 genuinely distinct
-  images. Don't.
-- Where two projects annotated the same photograph, they disagree. Among
-  same-stem pairs: 54% draw the same damage with a different number of polygon
-  vertices, 36% differ more substantially, and 8% assign **different classes**
-  outright (one file says `lamp broken`, the other says `dislocated part` +
-  `rub` + `rub`). This is the main argument for merging the taxonomy.
+Independent corroboration that 3,933 is right: the CarDD paper (Wang et al.,
+*IEEE T-ITS* 2023) documents roughly 4,000 images. Family grouping recovers the
+original dataset's scale almost exactly. Any procedure that leaves ~9,900
+"distinct" images has to explain where 6,000 extra photographs came from.
 
-## Real duplicates, found from pixels
+**7,211 of the 10,000 (72.1%) carry black padding** — rotation and shear leave
+pure-black wedges in the corners, which is how an augmented copy is detectable
+without comparing it to anything. Flip- and brightness-only augmentations leave no
+padding, so 72.1% is a lower bound on the augmented share.
 
-Detected with two signals that have to agree, because neither works alone:
+### An earlier version of this file said the opposite, and was wrong
 
-- **256-bit dHash** (16×17 grayscale gradient hash) — sharp, but sensitive to
-  cropping: a genuine re-crop of the same photo can score as high as 63.
-- **512-bin RGB histogram intersection** — survives crops and rescaling, but too
-  blunt alone, since many images are a grey panel on a black background.
+It claimed 97% of same-stem pairs are *different photographs*, and told the reader
+not to group by filename because doing so would discard ~6,000 real images. That
+was measured, not invented — but the measurement was broken, and it is worth
+recording how, because the same trap will catch anyone who re-checks this.
 
-A 64-bit dHash alone was tried first and was useless here: at hamming ≤ 6 it
-flagged 413 images, and visual inspection showed only the hamming-0 pair was a
-real duplicate. The rest were different cars sharing a silhouette. Close-up
-damage crops on plain backgrounds have low entropy, so a coarse hash collides.
+The check compared **raw** RGB histograms and assumed rotation barely changes a
+histogram. It changes it enormously: a rotated copy gains up to 28% pure black,
+which piles mass into the darkest bin and drags a same-photograph pair *below* the
+0.88 acceptance threshold. Same-photograph pairs were therefore counted as
+different photographs. The supporting detail that "41% do not even share
+dimensions" has the same cause — rotating a 640×480 frame changes its dimensions.
 
-Accepting `dHash ≤ 64 AND histogram ≥ 0.88` finds **229 images in 112 duplicate
-clusters** (10,000 images collapse to 9,883, so 117 copies are dropped), of which
-**50 clusters straddled the export's own train/valid/test boundary** — genuine
-leakage, about 1% of the data. Small, but free to fix.
+Masking near-black pixels (luminance > 24) and renormalising separates the two
+populations almost perfectly:
+
+| pair type | median intersection | range |
+|---|---|---|
+| same family (n=250) | 0.87 | none below 0.60 |
+| different families (n=250, control) | 0.37 | **none above 0.78** |
+
+No overlap. The four hardest cases in the ambiguous 0.75–0.79 band were opened and
+looked at: all four are one photograph rotated, and one pair even shares a
+`12.04.2017` camera timestamp burnt into the frame.
+
+The lesson is the control group. The original check measured same-stem pairs and
+never asked what score *unrelated* pairs get, so there was nothing to compare
+0.88 against.
+
+## Clustering: filename families, then pixels
+
+Two signals, unioned:
+
+- **Signal A, filename family** — the stem before `_jpg.rf.`. Cheap and exact,
+  and it accounts for 6,031 of the 6,067 merges.
+- **Signal B, pixel similarity** — catches the same photograph submitted to two
+  annotation projects under *different* names, which Signal A cannot see. Requires
+  **256-bit dHash ≤ 64 AND black-masked histogram intersection ≥ 0.88**, both, since
+  neither is reliable alone. Adds 36 more merges from 470 candidate pairs.
+
+Signal B compares only the 3,969 family *representatives*, not all 10,000 images.
+This is not just an optimisation. Rotated copies are largely black, so their
+dHashes cluster tightly and comparing all pairs produces a candidate-pair
+explosion — the first version of this ran for over six minutes and had not
+finished. Comparing representatives brings it to about 20 seconds.
+
+On earlier hash choices: a 64-bit dHash alone was useless here. At hamming ≤ 6 it
+flagged 413 images and only the hamming-0 pair was a real duplicate; the rest were
+different cars sharing a silhouette. Close-up damage crops on plain backgrounds
+have low entropy, so a coarse hash collides.
+
+Result: **3,933 clusters from 10,000 images.** 9,432 images sit in a cluster of two
+or more, and **1,872 clusters straddled the export's own train/valid/test
+boundary.**
+
+## The leak in the export's own split, and the fix
+
+Before this fix, `dataset/` inherited the export's split, and the numbers were bad:
+
+| | before | after |
+|---|---|---|
+| test images that are a copy of a train photograph | **1,208 of 1,482 (81.5%)** | **0** |
+| valid likewise | 1,198 of 1,483 (80.8%) | 0 |
+| families spanning two splits | 48% | 0 |
+| padded rotations in valid/test | ~72% | 0 |
+
+An mAP measured on the "before" column is not inflated, it is meaningless — the
+model would be scored almost entirely on photographs it trained on.
+
+Two rules fix it, and `tools/prepare_dataset.py` asserts both before it will
+declare success:
+
+1. **Split by cluster, never by image.** Every copy of a photograph lands in one
+   split.
+2. **Valid and test contain only unpadded photographs.** Black corner wedges never
+   occur when a user uploads a photo, so scoring on them measures the wrong
+   distribution. 1,468 photographs whose every surviving copy is padded (Roboflow
+   augmented only the export's train split, so a photograph living solely there has
+   no clean copy) are pinned to train.
 
 ## What `dataset/` contains
 
-9,883 images (one per duplicate cluster), 21,415 instances, 7 classes, split
-70/15/15 by cluster so no photograph can appear in two splits.
+3,933 images, one per cluster, 7 classes, split 70/15/15 by cluster.
 
 | class | train | valid | test | total |
 |---|---|---|---|---|
-| scratch | 5706 | 1229 | 1283 | 8218 |
-| dent | 3786 | 764 | 745 | 5295 |
-| dislocated_part | 1865 | 383 | 395 | 2643 |
-| crack | 1449 | 296 | 333 | 2078 |
-| glass_shatter | 942 | 201 | 212 | 1355 |
-| lamp_broken | 933 | 205 | 205 | 1343 |
-| tire_flat | 338 | 72 | 73 | 483 |
-| **images** | **6918** | **1483** | **1482** | **9883** |
-| of which no damage | 240 | 53 | 51 | 344 |
+| scratch | 2135 | 461 | 458 | 3054 |
+| dent | 1575 | 338 | 339 | 2252 |
+| dislocated_part | 746 | 162 | 161 | 1069 |
+| crack | 624 | 134 | 135 | 893 |
+| glass_shatter | 411 | 89 | 89 | 589 |
+| lamp_broken | 391 | 84 | 85 | 560 |
+| tire_flat | 147 | 32 | 32 | 211 |
+| **images** | **2742** | **588** | **603** | **3933** |
+| of which no damage | 26 | 24 | 0 | 50 |
+| of which still padded | 1468 | 0 | 0 | 1468 |
 
-The 344 images with empty label files are background negatives. Keeping them
-(3.5% of the set) helps suppress false positives on undamaged panels, which
-matters for a system whose output is a repair bill.
+Every class is within a point of 70% train, which is deliberate: the split
+balances each class's **instance count** separately, not the image count. An
+earlier version balanced image counts, and because rule 2 pins 1,468 clusters to
+train before dealing starts, train looked over-full and the rarest classes — dealt
+first — were pushed into valid and test. `tire_flat` came out 87 train against 124
+across valid and test, which is backwards; a model that barely sees flat tyres
+scores near zero on them however many test instances exist.
+
+**`tire_flat` has only 32 test instances**, below the 40 the script asks for, so it
+prints a warning. Report its AP as a range or with an explicit caveat, not as a
+point value. This is a limit of the data — there are only 211 flat-tyre instances
+in 3,933 photographs — and the honest fix is more flat-tyre images, not a
+different split.
+
+The 50 images with empty label files are background negatives. Keeping them helps
+suppress false positives on undamaged panels, which matters for a system whose
+output is a repair bill.
+
 
 ### Why 10 classes became 7
 
@@ -140,8 +221,20 @@ cost estimator consumes:
 | glass_shatter | glass shatter | replace glass |
 | tire_flat | tire flat | repair or replace tyre |
 
-This removes exactly the distinctions the annotators disagreed about, and lifts
-the smallest class from 229 instances to 483.
+The merge lifts the smallest class from `crash`'s 229 instances to `tire_flat`'s
+211 after deduplication — which is not an improvement in itself, because `crash`'s
+229 counted augmented copies. The real gain is that `crash`, `no part` and
+`dislocated part` are the same repair job, so a model no longer has to learn a
+three-way distinction that the cost estimator immediately throws away.
+
+Note that an earlier version of this file justified the merge differently: it
+claimed two annotation projects labelled the same photographs and disagreed about
+classes 8% of the time. That rested on the same-stem misreading corrected above.
+Same-stem files are one photograph augmented, and their labels differ because
+rotation and shear clip instances at the frame edge — changing vertex counts, and
+sometimes removing an instance entirely, which is what "different classes" was
+really measuring. The repair-action argument is the honest one and stands on its
+own; do not use the annotator-disagreement argument in the report or the viva.
 
 The counter-argument, worth being ready for: 10 classes are more granular and
 all are trainable. `MERGE_GROUPS` in `tools/prepare_dataset.py` is a single list
