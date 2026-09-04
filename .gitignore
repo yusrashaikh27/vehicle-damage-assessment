@@ -43,4 +43,9 @@ staticfiles/
 # Left behind when a file is deleted while a FUSE mount still has it open.
 # Nothing to do with the project, and the name changes every time.
 .fuse_hidden*
-weights/
+
+# Claude Code per-machine config. settings.local.json holds ANTHROPIC_AUTH_TOKEN
+# in cleartext, so it must never be committed - this repo is on GitHub.
+# .claude/settings.json (shared, no secrets) is deliberately NOT ignored.
+.claude/settings.local.json
+.claude/*.local.json
