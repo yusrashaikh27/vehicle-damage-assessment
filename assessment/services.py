@@ -12,8 +12,9 @@ What happens when an inspection is submitted
 2. `core.pipeline.assess_walkaround` detects and measures each photograph, then
    prices **once** across all of them.
 3. Everything it produced is written to the database inside one transaction -
-   detections against the photograph that produced them, cost lines against the
-   inspection.
+   detections against the photograph that produced them, cost lines (each a
+   low-high range) against the inspection, and the estimate as ranges: subtotal,
+   GST and the presented total (`range_low`, `range_high`).
 4. The PDF is generated *from the saved rows*, not from the pipeline's return
    value, so the document and the database cannot disagree.
 
@@ -68,8 +69,8 @@ def _money(value) -> Decimal:
 
     Via `str`, deliberately. `Decimal(0.1)` captures the float's binary error
     (0.1000000000000000055511151231257827) and carries it into the database;
-    `Decimal("0.1")` is exactly a tenth. core.cost already rounds to two
-    decimals, so this only has to preserve what it produced.
+    `Decimal("0.1")` is exactly a tenth. core.cost already rounds to whole
+    rupees at the line level, so this only has to preserve what it produced.
     """
     return Decimal(str(round(float(value), 2)))
 
@@ -84,7 +85,8 @@ def run_assessment(inspection: Inspection) -> Inspection:
     Safe to call again on the same row: previous detections and cost lines are
     deleted first, so the admin's "re-run" action replaces results rather than
     accumulating a second copy of them. That matters once real weights land and
-    the records assessed by the stub detector need redoing.
+    the records assessed by the stub detector need redoing. It is also how a
+    record saved before range pricing existed gets its ranges.
     """
     started = time.perf_counter()
 
@@ -207,6 +209,8 @@ def _persist(inspection: Inspection,
         view.processing_ms = assessed.elapsed_ms
         view.save()
 
+    # Each cost line is a low-high range. The old part / labour / paint columns
+    # are deprecated and left at their zero defaults.
     CostLine.objects.bulk_create([
         CostLine(
             inspection=inspection,
@@ -215,10 +219,8 @@ def _persist(inspection: Inspection,
             component=line.component,
             action=line.action[:120],
             instances=line.instances,
-            part_cost=_money(line.part_cost),
-            labour_cost=_money(line.labour_cost),
-            paint_cost=_money(line.paint_cost),
-            labour_hours=_money(line.labour_hours),
+            line_low=_money(line.low),
+            line_high=_money(line.high),
         )
         for line in quote.lines
     ])
@@ -226,12 +228,26 @@ def _persist(inspection: Inspection,
     inspection.status = Inspection.Status.COMPLETE
     inspection.error_message = ""
     inspection.overall_severity = quote.overall_severity
-    inspection.parts_total = _money(quote.parts_total)
-    inspection.labour_total = _money(quote.labour_total)
-    inspection.paint_total = _money(quote.paint_total)
+
+    # The estimate as presented: ranges all the way down. Stored so the results
+    # page, the history table and the PDF all show the same numbers and a later
+    # change to the rate card cannot rewrite an issued estimate.
+    inspection.subtotal_low = _money(quote.subtotal_low)
+    inspection.subtotal_high = _money(quote.subtotal_high)
+    inspection.gst_low = _money(quote.gst_low)
+    inspection.gst_high = _money(quote.gst_high)
+    inspection.range_low = _money(quote.low)
+    inspection.range_high = _money(quote.high)
+
+    # Deprecated single-figure columns: midpoints, and the component totals reset
+    # so a re-run of an old record does not leave stale parts / labour / paint.
+    inspection.parts_total = _money(0)
+    inspection.labour_total = _money(0)
+    inspection.paint_total = _money(0)
     inspection.subtotal = _money(quote.subtotal)
     inspection.gst_amount = _money(quote.gst)
     inspection.total = _money(quote.total)
+
     inspection.currency = quote.currency
     inspection.notes = list(quote.notes)
     inspection.model_name = result.model_name
@@ -308,19 +324,17 @@ def _report_data(inspection: Inspection) -> report_module.ReportData:
                 component_label=line.get_component_display(),
                 action=line.action,
                 instances=line.instances,
-                part_cost=float(line.part_cost),
-                labour_cost=float(line.labour_cost),
-                paint_cost=float(line.paint_cost),
-                labour_hours=float(line.labour_hours),
+                low=float(line.line_low),
+                high=float(line.line_high),
             )
             for line in inspection.cost_lines.all()
         ],
-        parts_total=float(inspection.parts_total),
-        labour_total=float(inspection.labour_total),
-        paint_total=float(inspection.paint_total),
-        subtotal=float(inspection.subtotal),
-        gst_amount=float(inspection.gst_amount),
-        total=float(inspection.total),
+        subtotal_low=float(inspection.subtotal_low),
+        subtotal_high=float(inspection.subtotal_high),
+        gst_low=float(inspection.gst_low),
+        gst_high=float(inspection.gst_high),
+        range_low=float(inspection.range_low),
+        range_high=float(inspection.range_high),
         notes=list(inspection.notes or []),
         model_name=inspection.model_name,
         is_stub=inspection.is_stub,

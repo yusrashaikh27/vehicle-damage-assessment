@@ -47,6 +47,79 @@ The photographs are the exception: they are a related table, pulled in by
   </div>
 </div>
 
+{% comment %}
+Both charts describe the whole table, and they sit above the search box for
+that reason: the view builds them from the unfiltered queryset, so a
+distribution that silently changed as you typed would be describing something
+other than what its heading claims. Putting them before the control that does
+not affect them is the cheapest way to say so.
+
+Each bar is aria-hidden and the figures live in the list beside or beneath it.
+That is deliberate rather than lazy - the text carries every number exactly, so
+the graphic can be decorative without anything being lost, and no colour is the
+only thing carrying a meaning.
+{% endcomment %}
+{% if severity_mix.total %}
+<div class="duo">
+  <section class="card">
+    <div class="card-head">
+      <h2>Severity mix</h2>
+      <span class="hint">{{ severity_mix.total }} assessed record{{ severity_mix.total|pluralize }}</span>
+    </div>
+    <div class="card-body">
+      <div class="stackbar" aria-hidden="true">
+        {% for seg in severity_mix.segments %}
+        <span class="stackbar-seg seg-{{ seg.tone }}" style="width:{{ seg.percent|floatformat:2 }}%">{% if seg.percent > 9 %}{{ seg.count }}{% endif %}</span>
+        {% endfor %}
+      </div>
+      <ul class="stackbar-key">
+        {% for seg in severity_mix.segments %}
+        <li>
+          <span class="swatch seg-{{ seg.tone }}"></span>
+          {{ seg.label }} <b>{{ seg.count }}</b> &middot; {{ seg.percent|floatformat:0 }}%
+        </li>
+        {% endfor %}
+      </ul>
+      <p class="footnote">
+        Records assessed with nothing found are counted in the total. Leaving
+        them out would report &ldquo;50% severe&rdquo; for a pair of inspections
+        where one was clean, which overstates the set.
+      </p>
+    </div>
+  </section>
+
+  <section class="card">
+    <div class="card-head">
+      <h2>Damage types found</h2>
+      <span class="hint">{{ class_mix.total }} region{{ class_mix.total|pluralize }} across all records</span>
+    </div>
+    <div class="card-body">
+      {% if class_mix.rows %}
+      <ul class="barlist">
+        {% for row in class_mix.rows %}
+        <li>
+          <span class="bar-label">{{ row.label }}</span>
+          <span class="bar-track" aria-hidden="true"><span class="bar-fill" style="width:{{ row.percent|floatformat:2 }}%"></span></span>
+          <span class="bar-count"><b>{{ row.count }}</b> &middot; {{ row.share|floatformat:0 }}%</span>
+        </li>
+        {% endfor %}
+      </ul>
+      <p class="footnote">
+        Bars are drawn as a share of the most common class, not of the total, so
+        the comparison stays readable as more classes appear. The percentage
+        beside each count is the share of all regions.
+      </p>
+      {% else %}
+      <p class="lede">
+        No damage regions recorded yet. Every assessment so far either found
+        nothing or has not completed.
+      </p>
+      {% endif %}
+    </div>
+  </section>
+</div>
+{% endif %}
+
 <form class="searchbar" method="get" role="search">
   <label class="skip" for="q">Search records</label>
   <input type="search" id="q" name="q" value="{{ query }}"
@@ -81,9 +154,16 @@ The photographs are the exception: they are a related table, pulled in by
         {% for inspection in page.object_list %}
         <tr>
           <td>
-            {# `with` so the property runs once per row rather than once per
-               reference - it walks the prefetched photographs to find the
-               close-up, and there is no reason to walk it three times. #}
+            {% comment %}
+            `with` so the property runs once per row rather than once per
+            reference - it walks the prefetched photographs to find the
+            close-up, and there is no reason to walk it three times.
+
+            A block comment, not the one-line form: Django's hash-brace
+            comment is single-line only, so a multi-line one is not a comment
+            at all and renders as visible text. This note used to print itself
+            into the thumbnail cell of every row on this page.
+            {% endcomment %}
             {% with shot=inspection.primary_image %}
             {% if shot and shot.display_image %}
               <img class="thumb" src="{{ shot.display_image.url }}" alt="">

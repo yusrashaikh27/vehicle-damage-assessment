@@ -101,12 +101,14 @@ class Assessment:
 
 
 def band_detections(detections: list[Detection],
-                    reference_area: float) -> list[AssessedDetection]:
+                    reference_area: float,
+                    image_width: int = 0,
+                    image_height: int = 0) -> list[AssessedDetection]:
     """Give every detection an area fraction and a severity."""
     assessed: list[AssessedDetection] = []
     for det in detections:
         fraction = det.area_px / reference_area if reference_area > 0 else 0.0
-        verdict = sev.classify(det.class_name, fraction)
+        verdict = sev.classify(det.class_name, fraction, det.polygon, det.bbox, image_width, image_height)
         assessed.append(AssessedDetection(
             class_name=det.class_name,
             class_label=CLASS_LABELS.get(det.class_name, det.class_name),
@@ -135,7 +137,7 @@ def aggregate(assessed: list[AssessedDetection],
         # class are double-counted by the sum, which is why the clamp to 1.0
         # matters rather than being defensive noise.
         total_fraction = sum(d.area_fraction for d in dets)
-        from_total = sev.classify(class_name, total_fraction).severity
+        from_total = sev.classify(class_name, total_fraction, None, None, 0, 0).severity
         from_worst = sev.worst(d.severity for d in dets)
 
         groups.append(DamageGroup(
@@ -169,7 +171,7 @@ def assess(image_path: Path | str,
     reference_area = sev.estimate_reference_area(
         result.image_width, result.image_height, vehicle_area_px)
 
-    assessed = band_detections(result.detections, reference_area)
+    assessed = band_detections(result.detections, reference_area, result.image_width, result.image_height)
     groups = aggregate(assessed, reference_area)
     quotation = estimate(groups, panel=panel, segment=segment)
 

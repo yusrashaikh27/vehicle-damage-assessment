@@ -49,3 +49,6 @@ staticfiles/
 # .claude/settings.json (shared, no secrets) is deliberately NOT ignored.
 .claude/settings.local.json
 .claude/*.local.json
+yolov8n-seg.pt
+*.backup
+*.tmp

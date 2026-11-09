@@ -9,10 +9,11 @@ different dataset or overstating what they built.
 
 What we do instead is defensible and inspectable: the trained segmentation
 model outputs a polygon per damage, a polygon has an area, and area is a
-reasonable proxy for how much work the repair needs. The mapping from area to
-Minor / Moderate / Severe is a documented rule in damage_config.SEVERITY_RULES,
-tightened by domain knowledge (a shattered windscreen is never "minor" - the
-glass gets replaced either way).
+reasonable proxy for how much work the repair needs. For linear damages like
+scratches and cracks, length is a better proxy than area for repair effort.
+The mapping from metric to Minor / Moderate / Severe is a documented rule in
+damage_config.SEVERITY_RULES, tightened by domain knowledge (a shattered
+windscreen is never "minor" - the glass gets replaced either way).
 
 The honest limitation, and have this answer ready
 ------------------------------------------------
@@ -106,16 +107,41 @@ class SeverityVerdict:
     reason: str            # human-readable, goes straight into the PDF report
 
 
-def classify(class_name: str, area_fraction: float) -> SeverityVerdict:
-    """Band an area fraction into a severity for one damage class.
+def _approximate_length(polygon: Sequence[Point]) -> float:
+    """Approximate length of a polygon (heuristic for open contours like scratches/cracks).
+    
+    For closed contours, this returns perimeter.
+    For open contours, this approximates the length by treating the polygon as
+    a sequence of connected line segments.
+    """
+    if len(polygon) < 2:
+        return 0.0
+    
+    length = 0.0
+    for i in range(len(polygon) - 1):
+        x1, y1 = polygon[i]
+        x2, y2 = polygon[i + 1]
+        length += ((x2 - x1) ** 2 + (y2 - y1) ** 2) ** 0.5
+    
+    # For closed polygons, add the closing segment
+    if len(polygon) >= 3:
+        x1, y1 = polygon[-1]
+        x2, y2 = polygon[0]
+        length += ((x2 - x1) ** 2 + (y2 - y1) ** 2) ** 0.5
+        
+    return length
 
-    Two steps, in this order:
 
-    1. Compare the area fraction against the class's own thresholds.
-    2. Raise the result to the class's floor if it came out below it.
-
-    Step 2 is what encodes "glass is always replaced". It can only ever raise
-    the verdict, never lower it, so a large area is never argued away.
+def classify(class_name: str, area_fraction: float,
+             polygon: list[tuple[float, float]] = None,
+             bbox: tuple[float, float, float, float] = None,
+             image_width: int = 0, image_height: int = 0) -> SeverityVerdict:
+    """Band a damage instance into severity using class-appropriate metrics.
+    
+    Uses different geometric features per class where area alone is insufficient:
+    - scratch/crack: approximate length (better correlates with repaint effort)
+    - dent/dislocated_part: area (often reasonable for these)
+    - others: area fraction (default)
     """
     rule = SEVERITY_RULES.get(class_name)
     if rule is None:
@@ -124,7 +150,46 @@ def classify(class_name: str, area_fraction: float) -> SeverityVerdict:
             f"known classes: {sorted(SEVERITY_RULES)}"
         )
 
-    fraction = min(max(float(area_fraction), 0.0), 1.0)
+    # Store the original area fraction for the return value
+    original_area_fraction = area_fraction
+    
+    # --- SELECT APPROPRIATE METRIC PER CLASS ---
+    metric = area_fraction  # default fallback
+    metric_description = "area fraction"  # For reason text
+    
+    if polygon and len(polygon) >= 3:
+        if class_name in ["scratch", "crack"]:
+            # For linear damages: use approximate length (proxy for repaint length)
+            length = _approximate_length(polygon)
+            # Normalize by characteristic size: prefer image dimensions, then bbox
+            if image_width > 0 and image_height > 0:
+                characteristic_size = (image_width**2 + image_height**2)**0.5
+                metric_description = f"length / image diagonal ({characteristic_size:.0f}px)"
+            elif bbox is not None:
+                bbox_width = bbox[2] - bbox[0]
+                bbox_height = bbox[3] - bbox[1]
+                characteristic_size = (bbox_width**2 + bbox_height**2)**0.5
+                characteristic_size = max(characteristic_size, 1.0)
+                metric_description = f"length / bbox diagonal ({characteristic_size:.0f}px)"
+            else:
+                # Fallback: use area-based normalization (should not happen if we have polygon)
+                characteristic_size = 100.0  # reasonable default
+                metric_description = f"length / nominal size ({characteristic_size:.0f}px)"
+            metric = min(length / characteristic_size, 1.0)
+            
+        elif class_name == "dent":
+            # For dents: area often works reasonably well
+            # Keeping area_fraction as base
+            pass  # metric remains area_fraction
+            
+        elif class_name == "dislocated_part":
+            # For missing parts: area is reasonable starting point
+            pass  # metric remains area_fraction
+            
+        # glass_shatter, lamp_broken, tire_flat: area_fraction usually adequate
+
+    # --- SEVERITY BANDING (unchanged logic, using new 'metric') ---
+    fraction = min(max(float(metric), 0.0), 1.0)
 
     if fraction <= rule.minor_max:
         banded = "minor"
@@ -136,16 +201,42 @@ def classify(class_name: str, area_fraction: float) -> SeverityVerdict:
     floored = SEVERITY_ORDER[max(SEVERITY_ORDER.index(banded),
                                  SEVERITY_ORDER.index(rule.floor))]
 
-    pct = fraction * 100
-    if floored != banded:
-        reason = (
-            f"covers {pct:.2f}% of the reference area; raised to "
-            f"{floored} because {rule.note.lower()}"
-        )
+    # Generate reason text that accurately reflects what was measured
+    if class_name in ["scratch", "crack"] and polygon and len(polygon) >= 3:
+        # For linear damages, describe the length metric
+        length = _approximate_length(polygon)
+        if image_width > 0 and image_height > 0:
+            characteristic_size = (image_width**2 + image_height**2)**0.5
+        elif bbox is not None:
+            bbox_width = bbox[2] - bbox[0]
+            bbox_height = bbox[3] - bbox[1]
+            characteristic_size = (bbox_width**2 + bbox_height**2)**0.5
+            characteristic_size = max(characteristic_size, 1.0)
+        else:
+            characteristic_size = 100.0
+        
+        normalized_length = length / characteristic_size
+        pct = normalized_length * 100
+        
+        if floored != banded:
+            reason = (
+                f"length metric {pct:.2f}% of reference; raised to {floored} "
+                f"because {rule.note.lower()}"
+            )
+        else:
+            reason = f"length metric {pct:.2f}% of reference"
     else:
-        reason = f"covers {pct:.2f}% of the reference area"
+        # For other classes, use area fraction as before
+        pct = fraction * 100
+        if floored != banded:
+            reason = (
+                f"covers {pct:.2f}% of the reference area; raised to "
+                f"{floored} because {rule.note.lower()}"
+            )
+        else:
+            reason = f"covers {pct:.2f}% of the reference area"
 
-    return SeverityVerdict(severity=floored, area_fraction=fraction, reason=reason)
+    return SeverityVerdict(severity=floored, area_fraction=original_area_fraction, reason=reason)
 
 
 def worst(severities: Iterable[str]) -> str:

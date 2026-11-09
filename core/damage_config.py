@@ -8,16 +8,13 @@ Three things live here:
 
 1. CLASS_NAMES     - the 7 damage classes, in the same order as dataset/data.yaml.
 2. SEVERITY_RULES  - how a mask area becomes Minor / Moderate / Severe.
-3. the cost tables - vehicle segments, panels, and the repair action implied by
-                     each (class, severity) pair.
+3. the cost tables - vehicle segments, panels (with a low-high repair price from a
+                     published price list) and the repair action implied by each
+                     (class, severity) pair.
 
-IMPORTANT, and say this out loud rather than being caught on it: the money
-figures below are *indicative*. They were set from typical Indian
-authorised-workshop pricing to make the system demonstrable end to end. Before
-the final submission, replace them with figures you can cite - an insurer's
-schedule of rates, a dealership quotation, or a published survey - and note the
-source in COST_SOURCE. A cost model whose provenance you can state is worth far
-more marks than one with suspiciously precise numbers and no origin.
+The cost model is REPAIR ONLY and every price is a RANGE. The only exceptions are
+lamps and glass, which cannot be repaired and are priced from the list's
+replacement table, and a flat tyre, which the list does not cover at all.
 """
 
 from __future__ import annotations
@@ -129,40 +126,61 @@ SEVERITY_RULES: dict[str, SeverityRule] = {
 # ---------------------------------------------------------------------------
 # 3. Cost model
 # ---------------------------------------------------------------------------
-# cost = part_cost(panel) x segment_multiplier x replace_fraction(class, severity)
-#      + labour_rate(segment) x labour_hours(class, severity)
-#      + paint_material(panel) x segment_multiplier   [only if the repair paints]
-#      then GST on the total.
+# Every price is a RANGE (low, high) taken from a published repair price list.
 #
-# The classes were merged by repair action in prepare_dataset.py precisely so
-# that this table can exist: each class maps onto one thing a workshop does.
+#   line range  = panel range  x  where the severity sits inside it
+#                              x  segment multiplier
+#                              x  instance factor (repeated damage of one type)
+#
+# A panel with several damage types is prepared and painted once, so the dearest
+# damage is charged in full and the rest at INSTANCE_FACTOR (see core/cost.py).
+# GST is then added to both ends of the range.
 
 CURRENCY = "INR"
 CURRENCY_SYMBOL = "₹"
 
 GST_RATE = 0.18  # Motor-vehicle repair in India attracts 18% GST on parts and labour.
 
+# Printed in the PDF, the results page and the notes. FILL IN the page URL and the
+# date you read it before submission. The list says "before offers" and does not
+# say whether GST is included; this project treats the prices as EXCLUDING GST
+# and adds it. If your guide wants them taken as GST-inclusive, set GST_RATE to
+# 0.0 and change this sentence.
 COST_SOURCE = (
-    "Indicative rates set from typical Indian authorised-workshop pricing "
-    "(2025). NOT yet sourced from a citable schedule of rates - replace before "
-    "final submission and record the source here."
+    "GoMechanic car body repair price list: approximate per-panel price ranges "
+    "for common passenger cars, before offers [add page URL and date accessed]. "
+    "Prices are treated as excluding GST."
 )
+
+# The presented total is rounded outward to a round figure at the scale of the
+# estimate: Rs. 500 steps for small totals, Rs. 1,000 from Rs. 20,000 up. The low
+# end is rounded down and the high end up, so rounding only ever widens a range.
+# Ascending by threshold; the first threshold must be 0.
+RANGE_STEP_TIERS: tuple[tuple[float, int], ...] = (
+    (0.0, 500),
+    (20_000.0, 1_000),
+)
+
+# Each cost line is rounded outward to this step (Rs.), so a line never reads as
+# falsely precise. The subtotal is the sum of the rounded lines, so the lines
+# always add up to it.
+RANGE_LINE_STEP = 100
 
 
 @dataclass(frozen=True)
 class Segment:
     label: str
-    part_multiplier: float   # applied to the hatchback baseline part cost
-    labour_rate: float       # INR per hour
+    # Applied to BOTH ends of every price. The price list is for "common
+    # passenger cars" (the hatchback baseline); larger and more premium cars
+    # cost more. These multipliers are a JUDGEMENT, not from the list - say so.
+    price_multiplier: float
 
 
-# Larger and more premium cars cost more in both parts and labour. One
-# multiplier per segment keeps the panel table to a single column.
 SEGMENTS: dict[str, Segment] = {
-    "hatchback": Segment("Hatchback", 1.00, 450.0),
-    "sedan":     Segment("Sedan",     1.25, 550.0),
-    "suv":       Segment("SUV / MUV", 1.60, 700.0),
-    "luxury":    Segment("Luxury / imported", 3.00, 1400.0),
+    "hatchback": Segment("Hatchback", 1.00),
+    "sedan":     Segment("Sedan",     1.25),
+    "suv":       Segment("SUV / MUV", 1.60),
+    "luxury":    Segment("Luxury / imported", 3.00),
 }
 
 DEFAULT_SEGMENT = "hatchback"
@@ -171,33 +189,55 @@ DEFAULT_SEGMENT = "hatchback"
 @dataclass(frozen=True)
 class Panel:
     label: str
-    part_cost: float    # hatchback baseline, INR, for a new part
-    paint_cost: float   # material only (primer, base, clear); labour is separate
-    paintable: bool = True
+    # Repair price range for the whole entry, Rs., hatchback baseline: denting,
+    # filling and painting, all-in. 0 means "this component is not repaired".
+    repair_low: float = 0.0
+    repair_high: float = 0.0
+    # Replacement price range, Rs. Only set for components that cannot be
+    # repaired (lamps and glass). 0 means "never replaced in this project".
+    replace_low: float = 0.0
+    replace_high: float = 0.0
+    # How many physical panels this entry stands for. The price range is already
+    # the total for the whole entry; this is used for flat per-panel prices
+    # (e.g. a minor-scratch touch-up on each of two doors).
+    panel_count: int = 1
 
 
 # The panel is supplied by the user at upload, not predicted. No class in the
 # dataset names a component - the labels are damage *types* - so the component
-# has to come from somewhere, and asking is both honest and accurate. The report
-# already says the user "uploads an image along with vehicle details".
+# has to come from somewhere, and asking is both honest and accurate.
+#
+# Ranges are from the price list's "denting and painting" table unless noted.
 PANELS: dict[str, Panel] = {
-    "front_bumper":  Panel("Front bumper",        4500, 2500),
-    "rear_bumper":   Panel("Rear bumper",         4200, 2500),
-    "bonnet":        Panel("Bonnet / hood",       7500, 3200),
-    "boot":          Panel("Boot / tailgate",     7800, 3000),
-    "roof":          Panel("Roof",               11000, 4000),
-    "front_fender":  Panel("Front fender",        3800, 2000),
-    "rear_fender":   Panel("Rear fender / quarter", 5200, 2400),
-    "front_door":    Panel("Front door",          9500, 2800),
-    "rear_door":     Panel("Rear door",           9000, 2800),
-    "windscreen":    Panel("Windscreen",          9000,    0, paintable=False),
-    "rear_glass":    Panel("Rear glass",          6500,    0, paintable=False),
-    "door_glass":    Panel("Door glass",          3500,    0, paintable=False),
-    "headlamp":      Panel("Headlamp",            6500,    0, paintable=False),
-    "taillamp":      Panel("Taillamp",            3500,    0, paintable=False),
-    "grille":        Panel("Front grille",        3200, 1500),
-    "wheel":         Panel("Wheel / tyre",        4500,    0, paintable=False),
-    "other":         Panel("Other / unspecified", 5000, 2500),
+    "front_bumper":  Panel("Front bumper",          1500, 3500),
+    "rear_bumper":   Panel("Rear bumper",           1500, 3500),
+    "bonnet":        Panel("Bonnet / hood",         2000, 4500),
+    "boot":          Panel("Boot / tailgate",       2000, 4000),
+    "roof":          Panel("Roof",                  3000, 7000),
+    "front_fender":  Panel("Front fender",          1500, 3500),
+    "rear_fender":   Panel("Rear fender / quarter", 2000, 4500),  # list: quarter panel
+    "front_door":    Panel("Front door",            2000, 4000),
+    "rear_door":     Panel("Rear door",             2000, 4000),
+    # Front + rear door on the same side: the two doors' ranges added together
+    # (2,000-4,000 + 2,000-4,000). Needed because one photograph often shows both
+    # doors, and a single-panel choice would price two damaged doors as one.
+    "doors_same_side": Panel("Front + rear door (same side)", 4000, 8000,
+                             panel_count=2),
+    # Glass and lamps cannot be repaired: replacement ranges from the list's
+    # "windshield, glass and lighting" table. The only non-repair prices here.
+    "windscreen":    Panel("Windscreen",   replace_low=3000, replace_high=12000),
+    "rear_glass":    Panel("Rear glass",   replace_low=3000, replace_high=10000),
+    "door_glass":    Panel("Door glass",   replace_low=1500, replace_high=5000),
+    "headlamp":      Panel("Headlamp",     replace_low=2000, replace_high=12000),
+    "taillamp":      Panel("Taillamp",     replace_low=1000, replace_high=6000),
+    # NOT directly in the list. The grille uses the list's "small paint touch-up"
+    # range as a stand-in. Replace with a cited figure if you find one.
+    "grille":        Panel("Front grille",   500, 1500),
+    # List: "alloy wheel - painting, per wheel".
+    "wheel":         Panel("Wheel / tyre",  1000, 2000),
+    # NOT in the list: a generic mid-range body-panel price, used when the owner
+    # does not say which panel. Replace with a cited figure if you find one.
+    "other":         Panel("Other / unspecified", 2000, 4000),
 }
 
 DEFAULT_PANEL = "other"
@@ -217,8 +257,8 @@ class Angle:
 # Each angle carries the component it *usually* shows, which pre-selects the panel
 # dropdown. It is a default, not a decision: a side-on photograph might be of the
 # rear door rather than the front, and the owner can say so. The panel matters
-# because it sets the part price, so a wrong default that goes uncorrected costs
-# real money - hence the defaults are conservative and every one is editable.
+# because it sets the price, so a wrong default that goes uncorrected costs real
+# money - hence the defaults are conservative and every one is editable.
 #
 # The four corners are 3/4 views. They are the most useful shots on a damaged car
 # because they show two faces at once, which is why insurers ask for them.
@@ -227,7 +267,7 @@ ANGLES: dict[str, Angle] = {
                          "Square to the front, whole bumper and grille in frame."),
     "front_left":  Angle("Front left (3/4)",  "front_fender",
                          "From the front-left corner, so front and left both show."),
-    "left":        Angle("Left side",         "front_door",
+    "left":        Angle("Left side",         "doors_same_side",
                          "Square to the side, full length of the car in frame."),
     "rear_left":   Angle("Rear left (3/4)",   "rear_fender",
                          "From the rear-left corner, showing rear and left."),
@@ -235,7 +275,7 @@ ANGLES: dict[str, Angle] = {
                          "Square to the back, whole bumper and tailgate."),
     "rear_right":  Angle("Rear right (3/4)",  "rear_fender",
                          "From the rear-right corner, showing rear and right."),
-    "right":       Angle("Right side",        "front_door",
+    "right":       Angle("Right side",        "doors_same_side",
                          "Square to the side, full length of the car in frame."),
     "front_right": Angle("Front right (3/4)", "front_fender",
                          "From the front-right corner, showing front and right."),
@@ -250,42 +290,80 @@ ANGLES: dict[str, Angle] = {
 DEFAULT_ANGLE = "closeup"
 
 
+# How a (class, severity) pair is priced. Four modes:
+#
+#   "repair"   - the panel's repair range, taking the slice from low_share to
+#                high_share of it (0.0 = bottom of the range, 1.0 = top). Minor
+#                damage sits in the lower part, severe in the upper part. These
+#                slices are a JUDGEMENT, not a measurement.
+#   "flat"     - a fixed per-panel range (the list's minor-scratch / touch-up
+#                price), independent of the panel's own range.
+#   "replace"  - the component's replacement range, for things that cannot be
+#                repaired (lamps, glass). One part is bought however many
+#                instances there are.
+#   "unpriced" - the price list has no figure, so nothing is charged and the
+#                report says so.
+REPAIR_MODES = ("repair", "flat", "replace", "unpriced")
+
+
 @dataclass(frozen=True)
 class RepairAction:
     description: str
-    replace_fraction: float  # 0.0 = repair in place, 1.0 = fit a new part
-    labour_hours: float
-    paints: bool
+    mode: str = "repair"
+    low_share: float = 0.0
+    high_share: float = 1.0
+    flat_low: float = 0.0
+    flat_high: float = 0.0
 
 
-# (class, severity) -> what the workshop actually does.
-# replace_fraction is a fraction rather than a boolean because some repairs sit
-# in between: a moderately cracked bumper is often sectioned and bonded rather
-# than replaced, which costs roughly a third of a new one in consumables.
+# (class, severity) -> what the workshop actually does, repair only.
 REPAIR_ACTIONS: dict[tuple[str, str], RepairAction] = {
-    ("scratch", "minor"):    RepairAction("Polish and spot re-paint", 0.00, 1.0, True),
-    ("scratch", "moderate"): RepairAction("Sand, prime and re-paint panel", 0.00, 2.0, True),
-    ("scratch", "severe"):   RepairAction("Full panel re-paint and blend", 0.00, 3.5, True),
+    # Scratch: minor uses the list's minor-scratch / touch-up price (Rs. 500-1,500);
+    # worse scratches need the panel re-painted, so use the panel range.
+    ("scratch", "minor"):    RepairAction("Polish and spot re-paint", mode="flat",
+                                          flat_low=500, flat_high=1500),
+    ("scratch", "moderate"): RepairAction("Sand, prime and re-paint panel",
+                                          low_share=0.25, high_share=0.75),
+    ("scratch", "severe"):   RepairAction("Full panel re-paint and blend",
+                                          low_share=0.50, high_share=1.00),
 
-    ("dent", "minor"):       RepairAction("Paintless dent removal", 0.00, 1.5, False),
-    ("dent", "moderate"):    RepairAction("Pull out, fill and re-paint", 0.00, 3.0, True),
-    ("dent", "severe"):      RepairAction("Panel beating, filling and re-paint", 0.00, 5.0, True),
+    # Dent: the list's "denting and painting" range.
+    ("dent", "minor"):       RepairAction("Dent removal and spot re-paint",
+                                          low_share=0.00, high_share=0.50),
+    ("dent", "moderate"):    RepairAction("Pull out, fill and re-paint",
+                                          low_share=0.25, high_share=0.75),
+    ("dent", "severe"):      RepairAction("Panel beating, filling and re-paint",
+                                          low_share=0.50, high_share=1.00),
 
-    ("crack", "minor"):      RepairAction("Plastic weld and touch-up", 0.00, 1.5, True),
-    ("crack", "moderate"):   RepairAction("Section, bond and re-paint", 0.35, 3.0, True),
-    ("crack", "severe"):     RepairAction("Replace part and re-paint", 1.00, 4.0, True),
+    # Crack: the list has no crack-repair price, so cracks use the same panel
+    # range as dents but one band higher (more work than a dent of the same
+    # severity). ASSUMPTION - state it in the report.
+    ("crack", "minor"):      RepairAction("Weld or fill crack and touch-up",
+                                          low_share=0.25, high_share=0.75),
+    ("crack", "moderate"):   RepairAction("Section, bond and re-paint",
+                                          low_share=0.50, high_share=1.00),
+    ("crack", "severe"):     RepairAction("Crack repair, filling and full re-paint",
+                                          low_share=0.50, high_share=1.00),
 
-    ("lamp_broken", "moderate"): RepairAction("Replace lamp assembly", 1.00, 1.0, False),
-    ("lamp_broken", "severe"):   RepairAction("Replace lamp assembly and mounting", 1.00, 1.5, False),
+    # Lamps and glass cannot be repaired: replacement range of the component.
+    ("lamp_broken", "moderate"): RepairAction("Replace lamp assembly", mode="replace"),
+    ("lamp_broken", "severe"):   RepairAction("Replace lamp assembly", mode="replace"),
 
-    ("dislocated_part", "moderate"): RepairAction("Refit and realign panel", 0.00, 2.5, False),
-    ("dislocated_part", "severe"):   RepairAction("Replace and refit panel", 1.00, 4.5, True),
+    # Dislocated part: project is repair-only, so it is refitted / straightened and
+    # priced from the panel's repair range. ASSUMPTION - not a listed service.
+    ("dislocated_part", "moderate"): RepairAction("Refit, realign and touch-up",
+                                                  low_share=0.25, high_share=0.75),
+    ("dislocated_part", "severe"):   RepairAction("Straighten, refit and re-paint panel",
+                                                  low_share=0.50, high_share=1.00),
 
-    ("glass_shatter", "moderate"): RepairAction("Replace glass", 1.00, 2.0, False),
-    ("glass_shatter", "severe"):   RepairAction("Replace glass and clear debris", 1.00, 2.5, False),
+    ("glass_shatter", "moderate"): RepairAction("Replace glass", mode="replace"),
+    ("glass_shatter", "severe"):   RepairAction("Replace glass", mode="replace"),
 
-    ("tire_flat", "moderate"): RepairAction("Puncture repair and balancing", 0.00, 0.5, False),
-    ("tire_flat", "severe"):   RepairAction("Replace tyre and balance", 1.00, 0.75, False),
+    # Not in the price list at all, so not charged. The report says so.
+    ("tire_flat", "moderate"): RepairAction("Puncture repair (not in price list)",
+                                            mode="unpriced"),
+    ("tire_flat", "severe"):   RepairAction("Tyre replacement (not in price list)",
+                                            mode="unpriced"),
 }
 
 
@@ -316,11 +394,38 @@ def _validate() -> None:
         )
 
     for key, action in REPAIR_ACTIONS.items():
-        assert 0.0 <= action.replace_fraction <= 1.0, f"{key}: bad replace_fraction"
-        assert action.labour_hours > 0, f"{key}: labour_hours must be positive"
+        assert action.mode in REPAIR_MODES, f"{key}: unknown mode {action.mode!r}"
+        assert 0.0 <= action.low_share <= action.high_share <= 1.0, (
+            f"{key}: shares must satisfy 0 <= low <= high <= 1"
+        )
+        if action.mode == "flat":
+            assert 0 < action.flat_low <= action.flat_high, (
+                f"{key}: a flat price needs 0 < flat_low <= flat_high"
+            )
 
     assert DEFAULT_PANEL in PANELS
     assert DEFAULT_SEGMENT in SEGMENTS
+
+    for key, panel in PANELS.items():
+        assert panel.panel_count >= 1, f"panel {key!r}: panel_count must be at least 1"
+        assert 0 <= panel.repair_low <= panel.repair_high, (
+            f"panel {key!r}: repair range out of order"
+        )
+        assert 0 <= panel.replace_low <= panel.replace_high, (
+            f"panel {key!r}: replace range out of order"
+        )
+
+    for key, seg in SEGMENTS.items():
+        assert seg.price_multiplier > 0, f"segment {key!r}: multiplier must be positive"
+
+    assert 0.0 <= GST_RATE < 1.0, "GST_RATE must be a fraction"
+    assert RANGE_LINE_STEP > 0, "RANGE_LINE_STEP must be positive"
+
+    # The rounding tiers must start at zero, ascend, and use positive steps.
+    thresholds = [t for t, _ in RANGE_STEP_TIERS]
+    assert thresholds[0] == 0.0, "RANGE_STEP_TIERS must start at threshold 0"
+    assert thresholds == sorted(thresholds), "RANGE_STEP_TIERS must ascend"
+    assert all(step > 0 for _, step in RANGE_STEP_TIERS), "steps must be positive"
 
     # Every angle must default to a panel that actually has a price, or the first
     # upload from that angle would be priced against a missing rate card entry.

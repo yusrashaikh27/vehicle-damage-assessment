@@ -1,291 +1,322 @@
-"""Damage detection: a thin, testable wrapper around the trained YOLO11-seg model.
+"""YOLO wrapper with optional vehicle segmentation for scale-invariant assessment and false positive reduction.
 
-Two design decisions worth knowing about.
+This module extends the base YOLO detector to optionally include vehicle segmentation
+capabilities for:
+1. Creating vehicle masks for scale-invariant severity assessment
+2. Filtering out false positive detections on background/road
+3. Enabling more accurate area fraction calculation
 
-**The app runs before the weights exist.** Training takes hours on a free Colab
-T4, so `get_detector()` falls back to `StubDetector` when `weights/best.pt` is
-missing. The stub returns fixed, plausible detections, which means the whole
-chain - upload, severity, cost, PDF, database, admin - can be built and proven
-today and the real model dropped in as a single file later. The web page says
-loudly when it is showing stub output, because a demo that silently shows fake
-results is a trap.
-
-**Mask area is measured by rasterising, not by the shoelace formula.**
-Ultralytics gives polygons in `masks.xy`, and a shoelace area over those is
-wrong whenever a polygon self-intersects - the overlapping region cancels
-against itself and the area comes out too small, sometimes near zero. Since the
-area feeds severity and severity feeds the bill, that failure mode is not
-acceptable. Instead each polygon is drawn onto a blank single-channel image at
-the original resolution and the filled pixels are counted. Exact, and it depends
-on nothing but Pillow.
+Coordinate-space rule
+---------------------
+Everything this module returns - bbox, polygon, area_px, vehicle_mask,
+vehicle_area_px - is in ORIGINAL PHOTO pixels. Ultralytics returns masks at the
+model's inference size by default (e.g. 416x640) while boxes are scaled back to
+the photo (e.g. 504x776); mixing the two caused the "operands could not be
+broadcast together" failure. `retina_masks=True` plus the `_fit` guard below
+keep every array in photo space.
 """
 
 from __future__ import annotations
 
-import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Sequence
+from typing import List, Optional
 
-from .damage_config import CLASS_NAMES
+import cv2
+import numpy as np
 
-logger = logging.getLogger(__name__)
+from ultralytics import YOLO
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
-DEFAULT_WEIGHTS = PROJECT_ROOT / "weights" / "best.pt"
+from . import damage_config
+from .vehicle_detector import VehicleDetector
 
-# Confidence floor for a detection to be reported. 0.35 is deliberately lower
-# than the 0.5 people usually reach for: missing damage understates a repair
-# bill, and an over-reported scratch is cheap to dismiss by eye, so recall is
-# worth more than precision here. Revisit once the real PR curve exists.
-DEFAULT_CONF = 0.35
-DEFAULT_IOU = 0.50
-DEFAULT_IMGSZ = 640
+Point = tuple[float, float]
+BBox = tuple[float, float, float, float]  # x1, y1, x2, y2 (pixel coordinates)
 
 
-class WeightsNotFound(RuntimeError):
-    pass
-
-
-@dataclass
+@dataclass(frozen=True)
 class Detection:
-    class_id: int
-    class_name: str
-    confidence: float
-    bbox: tuple[float, float, float, float]          # x1, y1, x2, y2 in pixels
-    polygon: list[tuple[float, float]] = field(default_factory=list)
-    area_px: float = 0.0
+    """The output of the detector for one damage instance."""
+    class_name: str          # e.g. "scratch"
+    bbox: BBox               # bounding box (x1, y1, x2, y2) in pixels
+    polygon: List[Point]     # list of vertices (x, y) in pixels
+    area_px: float           # area in pixels (from rasterized polygon mask)
+    confidence: float        # detection confidence (0-1)
+    # Kept for backward compatibility. Left as None per detection on purpose:
+    # the single vehicle mask lives on DetectionResult, and copying a full-size
+    # array onto every detection wasted memory.
+    vehicle_mask: Optional[np.ndarray] = None
 
 
-@dataclass
+@dataclass(frozen=True)
 class DetectionResult:
-    detections: list[Detection]
-    image_width: int
-    image_height: int
-    annotated_path: Path | None = None
-    is_stub: bool = False
+    """Result of running detection on one image."""
+    detections: List[Detection]
+    image_path: Path
+    annotated_path: Optional[Path] = None
+    vehicle_area_px: float = 0.0          # area of vehicle in pixels (0 if not detected)
+    vehicle_mask: Optional[np.ndarray] = None  # vehicle segmentation mask
+    image_width: int = 0
+    image_height: int = 0
+    is_stub: bool = False                 # True if using stub detector
     model_name: str = ""
+    elapsed_ms: int = 0
 
     @property
-    def image_area(self) -> float:
-        return float(self.image_width * self.image_height)
+    def damage_found(self) -> bool:
+        return bool(self.detections)
 
 
-# ---------------------------------------------------------------------------
-# Area measurement
-# ---------------------------------------------------------------------------
+def _fit(mask: np.ndarray, height: int, width: int) -> np.ndarray:
+    """Return `mask` as a boolean array of exactly (height, width).
 
-def rasterised_area(polygon: Sequence[tuple[float, float]],
-                    width: int, height: int) -> float:
-    """Filled pixel count of a polygon drawn at (width, height).
-
-    Correct for self-intersecting polygons, where the shoelace formula is not.
-    Uses Pillow's even-odd polygon fill.
+    A no-op when the size already matches. Nearest-neighbour keeps a binary mask
+    binary; any interpolation would create in-between values. Note that
+    cv2.resize takes (width, height), the reverse of numpy's .shape.
     """
-    if len(polygon) < 3:
-        return 0.0
-    from PIL import Image, ImageDraw
+    if mask.shape[:2] != (height, width):
+        mask = cv2.resize(
+            (mask > 0.5).astype(np.uint8),
+            (width, height),
+            interpolation=cv2.INTER_NEAREST,
+        )
+    return mask > 0.5 if mask.dtype != bool else mask
 
-    canvas = Image.new("1", (max(width, 1), max(height, 1)), 0)
-    ImageDraw.Draw(canvas).polygon([(float(x), float(y)) for x, y in polygon],
-                                   fill=1)
-    # A "1"-mode histogram is [zeros, ones]; the ones are the filled pixels.
-    return float(canvas.histogram()[-1])
-
-
-# ---------------------------------------------------------------------------
-# Real detector
-# ---------------------------------------------------------------------------
 
 class YoloSegDetector:
-    """Wraps ultralytics YOLO11-seg. The model is loaded once, on first use."""
+    """Wrapper around a YOLO instance-segmentation model with optional vehicle detection."""
 
-    def __init__(self, weights: Path | str = DEFAULT_WEIGHTS,
-                 conf: float = DEFAULT_CONF, iou: float = DEFAULT_IOU,
-                 imgsz: int = DEFAULT_IMGSZ):
-        self.weights = Path(weights)
+    def __init__(
+        self,
+        weights: str | Path,
+        vehicle_weights: str | Path = "yolov8n-seg.pt",
+        conf: float = 0.25,
+        iou: float = 0.45,
+        imgsz: int = 640,
+        enable_vehicle_detection: bool = True,
+    ):
+        """
+        Args:
+            weights: path to the damage detection *.pt file
+            vehicle_weights: path to vehicle segmentation *.pt file (COCO-pretrained)
+            conf: detection confidence threshold
+            iou: NMS IoU threshold
+            imgsz: inference image size (pixels)
+            enable_vehicle_detection: whether to run vehicle segmentation for masking
+        """
+        self.damage_model = YOLO(weights)
+        self.vehicle_detector = (
+            VehicleDetector(vehicle_weights) if enable_vehicle_detection else None
+        )
         self.conf = conf
         self.iou = iou
         self.imgsz = imgsz
-        self._model = None
-
-    @property
-    def available(self) -> bool:
-        return self.weights.exists()
-
-    def _load(self):
-        if self._model is not None:
-            return self._model
-        if not self.available:
-            raise WeightsNotFound(
-                f"No trained weights at {self.weights}. Train in Colab with "
-                f"notebooks/train_colab.ipynb, then copy best.pt there."
-            )
-        # Imported here, not at module scope: ultralytics pulls in torch, which
-        # takes seconds and hundreds of MB. Django's autoreloader imports every
-        # module on every code change, so a top-level import would make the dev
-        # server painful to work with.
-        from ultralytics import YOLO
-
-        logger.info("loading segmentation weights from %s", self.weights)
-        self._model = YOLO(str(self.weights))
-        return self._model
-
-    def detect(self, image_path: Path | str,
-               annotated_dir: Path | str | None = None) -> DetectionResult:
-        model = self._load()
-        image_path = Path(image_path)
-
-        results = model.predict(
-            source=str(image_path), imgsz=self.imgsz, conf=self.conf,
-            iou=self.iou, verbose=False,
+        self.enable_vehicle_detection = enable_vehicle_detection
+        self.weights = Path(weights)
+        self.vehicle_weights = Path(vehicle_weights) if enable_vehicle_detection else None
+        self.model_name = (
+            "YOLO11s-seg + "
+            f"{'YOLOv8n-seg vehicle' if enable_vehicle_detection else 'no vehicle'}"
         )
-        result = results[0]
-        height, width = result.orig_shape
 
-        # Ultralytics names come from the weights file, so a model trained on a
-        # different taxonomy cannot silently be misread as ours.
-        names = result.names if isinstance(result.names, dict) else dict(
-            enumerate(result.names))
+    def detect(
+        self,
+        source: str | Path,
+        *,
+        augment: bool = False,
+        annotate: bool = True,
+        annotated_dir: Optional[Path | str] = None,
+    ) -> DetectionResult:
+        """Run damage detection on an image, optionally filtered by a vehicle mask.
 
-        detections: list[Detection] = []
-        boxes = result.boxes
-        polygons = result.masks.xy if result.masks is not None else []
+        Returns a DetectionResult with detections in original-photo pixels, the
+        vehicle mask/area (if enabled) and the annotated overlay path (if
+        `annotate` is true and `annotated_dir` is given).
+        """
+        # retina_masks=True makes Ultralytics return masks at the ORIGINAL image
+        # size instead of the inference size, so masks line up with the boxes.
+        damage_results = self.damage_model(
+            str(source),
+            augment=augment,
+            conf=self.conf,
+            iou=self.iou,
+            imgsz=self.imgsz,
+            retina_masks=True,
+            verbose=False,
+        )[0]
 
-        for i in range(len(boxes) if boxes is not None else 0):
-            class_id = int(boxes.cls[i].item())
-            confidence = float(boxes.conf[i].item())
-            x1, y1, x2, y2 = (float(v) for v in boxes.xyxy[i].tolist())
+        img_h, img_w = damage_results.orig_shape  # (height, width) of the photo
 
-            polygon: list[tuple[float, float]] = []
-            if i < len(polygons):
-                polygon = [(float(px), float(py)) for px, py in polygons[i]]
+        # Vehicle segmentation, forced into photo space whatever size it returns.
+        vehicle_mask: Optional[np.ndarray] = None
+        vehicle_area_px = 0.0
+        if self.enable_vehicle_detection and self.vehicle_detector is not None:
+            raw_mask, _coverage = self.vehicle_detector.detect_vehicle(source)
+            if raw_mask is not None:
+                vehicle_mask = _fit(np.asarray(raw_mask), img_h, img_w)
+                vehicle_area_px = float(vehicle_mask.sum())
 
-            if polygon:
-                area = rasterised_area(polygon, width, height)
-            else:
-                # A segmentation model that returned no mask for a box is
-                # anomalous; fall back to the box area rather than dropping the
-                # detection, and note it so it is not mistaken for a real mask.
-                area = max(x2 - x1, 0.0) * max(y2 - y1, 0.0)
-                logger.warning("detection %d has no mask; used box area", i)
+        detections: List[Detection] = []
+        if damage_results.boxes is not None and damage_results.masks is not None:
+            boxes = damage_results.boxes.data.cpu().numpy()   # (n, 6)
+            masks = damage_results.masks.data.cpu().numpy()   # (n, h, w)
 
-            detections.append(Detection(
-                class_id=class_id,
-                class_name=names.get(class_id, f"class_{class_id}"),
-                confidence=confidence,
-                bbox=(x1, y1, x2, y2),
-                polygon=polygon,
-                area_px=area,
-            ))
+            for box, raw in zip(boxes, masks):
+                x1, y1, x2, y2, conf, cls = box
+                class_id = int(cls)
 
-        annotated_path = None
-        if annotated_dir is not None:
-            annotated_path = self._save_annotated(result, image_path,
-                                                  Path(annotated_dir))
+                # Belt and braces: guarantee the mask is photo-sized and boolean
+                # even if retina_masks behaves differently in another version.
+                mask = _fit(raw, img_h, img_w)
+
+                damage_area = float(mask.sum())
+                if damage_area <= 0:
+                    continue
+
+                # Drop detections that sit mostly off the vehicle (road,
+                # background). Needs >10% of the damage mask inside the vehicle.
+                if vehicle_mask is not None:
+                    overlap_area = float(np.logical_and(mask, vehicle_mask).sum())
+                    if (overlap_area / damage_area) <= 0.1:
+                        continue
+
+                detections.append(
+                    Detection(
+                        class_name=damage_config.CLASS_NAMES[class_id],
+                        bbox=(float(x1), float(y1), float(x2), float(y2)),
+                        polygon=self._mask_to_polygon(mask),
+                        area_px=damage_area,
+                        confidence=float(conf),
+                    )
+                )
+
+        # Highest confidence first.
+        detections.sort(key=lambda d: d.confidence, reverse=True)
+
+        # Annotated overlay, written where the caller asked.
+        annotated_path: Optional[Path] = None
+        if annotate and annotated_dir is not None:
+            out_dir = Path(annotated_dir)
+            out_dir.mkdir(parents=True, exist_ok=True)
+            annotated_path = out_dir / f"{Path(source).stem}_annotated.jpg"
+            cv2.imwrite(str(annotated_path), damage_results.plot())  # BGR array
 
         return DetectionResult(
-            detections=detections, image_width=width, image_height=height,
-            annotated_path=annotated_path, is_stub=False,
-            model_name=self.weights.name,
+            detections=detections,
+            image_path=Path(source),
+            annotated_path=annotated_path,
+            vehicle_area_px=vehicle_area_px,
+            vehicle_mask=vehicle_mask,
+            image_width=int(img_w),
+            image_height=int(img_h),
+            is_stub=False,
+            model_name=self.model_name,
         )
 
-    @staticmethod
-    def _save_annotated(result, image_path: Path, annotated_dir: Path) -> Path:
-        """Write the masked, labelled image. This is the figure users see."""
-        from PIL import Image
+    def _mask_to_polygon(self, mask: np.ndarray) -> List[Point]:
+        """Convert a binary mask to a simplified polygon contour using OpenCV."""
+        contours, _ = cv2.findContours(
+            mask.astype(np.uint8),
+            cv2.RETR_EXTERNAL,
+            cv2.CHAIN_APPROX_SIMPLE,
+        )
+        if not contours:
+            return []
 
-        annotated_dir.mkdir(parents=True, exist_ok=True)
-        out = annotated_dir / f"{image_path.stem}_annotated.jpg"
-        # result.plot() returns a BGR array (an OpenCV convention); PIL expects
-        # RGB, so the channel order is reversed. Skip this and every red mask
-        # comes out blue.
-        Image.fromarray(result.plot()[:, :, ::-1]).save(out, quality=90)
-        return out
+        # Largest contour is the damage region.
+        largest = max(contours, key=cv2.contourArea)
 
+        # Approximate to reduce the number of points.
+        epsilon = 0.005 * cv2.arcLength(largest, True)
+        approx = cv2.approxPolyDP(largest, epsilon, True)
 
-# ---------------------------------------------------------------------------
-# Stub detector
-# ---------------------------------------------------------------------------
+        return [(float(p[0][0]), float(p[0][1])) for p in approx]
+
 
 class StubDetector:
-    """Fixed, plausible detections so the app works before training finishes.
+    """Returns fixed detections for testing without trained weights."""
 
-    Draws two rectangles roughly where damage tends to sit in a photograph: a
-    scratch across about 3% of the frame (moderate) and a dent over about 0.7%
-    (minor). Between them they exercise both severity bands, the painting and
-    non-painting cost paths, and the aggregation logic.
-    """
+    def __init__(self):
+        self.weights = Path("weights/best.pt")
+        self.model_name = "StubDetector"
+        self.enable_vehicle_detection = False
 
-    available = True
+    def detect(
+        self,
+        source: str | Path,
+        *,
+        augment: bool = False,
+        annotate: bool = True,
+        annotated_dir: Optional[Path | str] = None,
+    ) -> DetectionResult:
+        """Return the same two regions for every photograph."""
+        w, h = 640, 480  # defaults, overridden by the real image size if readable
+        try:
+            from PIL import Image
+            with Image.open(source) as img:
+                w, h = img.size
+        except Exception:
+            pass
 
-    def detect(self, image_path: Path | str,
-               annotated_dir: Path | str | None = None) -> DetectionResult:
-        from PIL import Image, ImageDraw
-
-        image_path = Path(image_path)
-        with Image.open(image_path) as im:
-            width, height = im.size
-            annotated = im.convert("RGB").copy()
-
-        spec = [
-            ("scratch", 0.35, 0.55, 0.55, 0.60, 0.88),
-            ("dent",    0.20, 0.30, 0.32, 0.38, 0.74),
+        # Two regions covering ~1% and ~0.96% of the frame, chosen to exercise
+        # both severity bands.
+        detections = [
+            Detection(
+                class_name="scratch",
+                bbox=(w * 0.1, h * 0.1, w * 0.3, h * 0.3),
+                polygon=[
+                    (w * 0.1, h * 0.1),
+                    (w * 0.3, h * 0.1),
+                    (w * 0.3, h * 0.3),
+                    (w * 0.1, h * 0.3),
+                ],
+                area_px=w * h * 0.01,
+                confidence=0.9,
+            ),
+            Detection(
+                class_name="dent",
+                bbox=(w * 0.6, h * 0.2, w * 0.9, h * 0.5),
+                polygon=[
+                    (w * 0.6, h * 0.2),
+                    (w * 0.9, h * 0.2),
+                    (w * 0.9, h * 0.5),
+                    (w * 0.6, h * 0.5),
+                ],
+                area_px=w * h * 0.0096,
+                confidence=0.85,
+            ),
         ]
 
-        detections: list[Detection] = []
-        draw = ImageDraw.Draw(annotated)
-        for class_name, fx1, fy1, fx2, fy2, conf in spec:
-            x1, y1 = fx1 * width, fy1 * height
-            x2, y2 = fx2 * width, fy2 * height
-            polygon = [(x1, y1), (x2, y1), (x2, y2), (x1, y2)]
-            draw.polygon(polygon, outline=(255, 60, 60), width=3)
-            draw.text((x1 + 4, max(y1 - 14, 0)), f"{class_name} (stub)",
-                      fill=(255, 60, 60))
-            detections.append(Detection(
-                class_id=CLASS_NAMES.index(class_name),
-                class_name=class_name,
-                confidence=conf,
-                bbox=(x1, y1, x2, y2),
-                polygon=polygon,
-                area_px=rasterised_area(polygon, width, height),
-            ))
-
-        annotated_path = None
-        if annotated_dir is not None:
-            annotated_dir = Path(annotated_dir)
-            annotated_dir.mkdir(parents=True, exist_ok=True)
-            annotated_path = annotated_dir / f"{image_path.stem}_annotated.jpg"
-            annotated.save(annotated_path, quality=90)
-
         return DetectionResult(
-            detections=detections, image_width=width, image_height=height,
-            annotated_path=annotated_path, is_stub=True,
-            model_name="stub (no trained weights found)",
+            detections=detections,
+            image_path=Path(source),
+            annotated_path=None,
+            vehicle_area_px=0.0,
+            vehicle_mask=None,
+            image_width=w,
+            image_height=h,
+            is_stub=True,
+            model_name=self.model_name,
         )
 
 
-# ---------------------------------------------------------------------------
-# Factory
-# ---------------------------------------------------------------------------
-
-_cached: YoloSegDetector | StubDetector | None = None
-
-
-def get_detector(weights: Path | str = DEFAULT_WEIGHTS,
-                 force_reload: bool = False):
-    """The real detector if weights are present, otherwise the stub.
-
-    Cached at module level so the ~50 MB model is loaded once per process
-    rather than once per request.
-    """
-    global _cached
-    if _cached is not None and not force_reload:
-        return _cached
-    real = YoloSegDetector(weights)
-    if real.available:
-        _cached = real
-    else:
-        logger.warning("no weights at %s - falling back to StubDetector", weights)
-        _cached = StubDetector()
-    return _cached
+def get_detector(
+    weights: str | Path = "weights/best.pt",
+    vehicle_weights: str | Path = "yolov8n-seg.pt",
+    conf: float = 0.25,
+    iou: float = 0.45,
+    imgsz: int = 640,
+    enable_vehicle_detection: bool = True,
+) -> YoloSegDetector | StubDetector:
+    """Get a damage detector instance, falling back to the stub if weights are missing."""
+    weights_path = Path(weights)
+    if weights_path.is_file():
+        return YoloSegDetector(
+            weights=weights_path,
+            vehicle_weights=vehicle_weights,
+            conf=conf,
+            iou=iou,
+            imgsz=imgsz,
+            enable_vehicle_detection=enable_vehicle_detection,
+        )
+    return StubDetector()

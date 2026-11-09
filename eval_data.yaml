@@ -1,0 +1,13 @@
+path: "/Users/yusra/ALL PROJECTS OF YUSRA/vehicle damage assessment/dataset"
+train: images/train
+val: images/valid
+test: images/test
+nc: 7
+names:
+  0: scratch
+  1: dent
+  2: crack
+  3: lamp_broken
+  4: dislocated_part
+  5: glass_shatter
+  6: tire_flat

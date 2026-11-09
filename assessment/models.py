@@ -21,7 +21,9 @@ page re-reads the database; it does not re-run the model. That is deliberate:
 inference takes seconds, and more importantly a saved report must not silently
 change when the weights file is replaced. An inspection is a record of what the
 system concluded on a given day with a given model - which is why `model_name`
-and `is_stub` are stored alongside the numbers.
+and `is_stub` are stored alongside the numbers. Every cost range (each line, the
+subtotal, GST and the presented total) is stored for the same reason: changing
+the rate card later must not rewrite a quotation already issued.
 
 **Owner details live on the inspection, not in a Customer table.** Normalising
 them out would be the textbook answer, and it is the wrong one here. An
@@ -41,6 +43,16 @@ photograph that produced them - `DamageDetection.image` - while `CostLine` hangs
 off the *inspection*, because the quotation is priced once across every view. See
 `core.cost.estimate_combined` for why that has to be so: a bumper photographed
 from two angles is still one bumper to buy.
+
+Deprecated columns
+------------------
+`parts_total`, `labour_total`, `paint_total`, `subtotal`, `gst_amount`, `total`
+on Inspection and `part_cost`, `labour_cost`, `paint_cost`, `labour_hours` on
+CostLine belong to the old single-figure model. They are kept (and no longer
+meaningfully filled) so existing records, the admin and any page that still reads
+them keep working without a destructive migration. The ranges below are what is
+presented. Once nothing references the old columns, remove them in a later
+migration.
 """
 
 from __future__ import annotations
@@ -67,6 +79,17 @@ from core.damage_config import (
 # All money columns share these limits: up to 99,999,999.99. A written-off
 # luxury car does not reach eight figures of panel work, so this is ample.
 MONEY = {"max_digits": 10, "decimal_places": 2, "default": Decimal("0.00")}
+
+
+def _format_range(low: Decimal, high: Decimal) -> str:
+    """A stored low/high pair as text, e.g. '₹9,000 – ₹14,000'. Empty if unset."""
+    # Imported here so that importing the models never depends on the cost
+    # module's import chain.
+    from core.cost import money_range
+
+    if high is None or high <= 0:
+        return ""
+    return money_range(float(low), float(high))
 
 
 class Inspection(models.Model):
@@ -106,10 +129,10 @@ class Inspection(models.Model):
     vehicle_year = models.PositiveIntegerField()
     registration_number = models.CharField(max_length=20)
 
-    # Segment drives part prices and the labour rate for the whole vehicle. The
-    # panel is per photograph and lives on VehicleImage, because different angles
-    # show different components. Neither can be predicted from the dataset - no
-    # class in it names a component - so both are asked for. See core/cost.py.
+    # Segment drives the price multiplier for the whole vehicle. The panel is per
+    # photograph and lives on VehicleImage, because different angles show
+    # different components. Neither can be predicted from the dataset - no class
+    # in it names a component - so both are asked for. See core/cost.py.
     segment = models.CharField(
         max_length=20, choices=SEGMENT_CHOICES, default=DEFAULT_SEGMENT
     )
@@ -129,6 +152,10 @@ class Inspection(models.Model):
         max_length=10, choices=SEVERITY_CHOICES, blank=True
     )
 
+    # DEPRECATED single-figure columns (see the module docstring). Kept so old
+    # records and anything still reading them keep working. `subtotal`,
+    # `gst_amount` and `total` now hold the midpoint of their range; the three
+    # component totals are no longer filled.
     parts_total = models.DecimalField(**MONEY)
     labour_total = models.DecimalField(**MONEY)
     paint_total = models.DecimalField(**MONEY)
@@ -137,10 +164,22 @@ class Inspection(models.Model):
     total = models.DecimalField(**MONEY)
     currency = models.CharField(max_length=8, default=CURRENCY)
 
-    # Caveats the cost model produced ("bumper repaired rather than replaced,
-    # so only 35% of the part price is charged", "the same damage type appears in
-    # more than one photograph"). A list of strings. Stored rather than
-    # regenerated so the saved report and the PDF always agree.
+    # The estimate as presented. Every figure is a low-high range:
+    #   subtotal_low / subtotal_high  sum of the cost lines, before GST
+    #   gst_low / gst_high            GST on each end
+    #   range_low / range_high        the total, GST included, rounded outward
+    # All stay 0.00 for an inspection that found no damage, and for any
+    # inspection saved before these columns existed - see `has_range`.
+    subtotal_low = models.DecimalField(**MONEY)
+    subtotal_high = models.DecimalField(**MONEY)
+    gst_low = models.DecimalField(**MONEY)
+    gst_high = models.DecimalField(**MONEY)
+    range_low = models.DecimalField(**MONEY)
+    range_high = models.DecimalField(**MONEY)
+
+    # Caveats the cost model produced ("the same damage type appears in more than
+    # one photograph", "repeated damage is charged at 40%"). A list of strings.
+    # Stored rather than regenerated so the saved report and the PDF always agree.
     notes = models.JSONField(default=list, blank=True)
 
     # --- provenance -------------------------------------------------------
@@ -198,6 +237,53 @@ class Inspection(models.Model):
         return f"{self.vehicle_make} {self.vehicle_model} ({self.vehicle_year})"
 
     @property
+    def has_range(self) -> bool:
+        """True when a low/high estimate was stored for this inspection.
+
+        False for an undamaged vehicle and for records saved before the range
+        columns existed. Templates and the PDF use it to decide between showing
+        the range and falling back, so an old record does not print "₹0 – ₹0".
+        """
+        return self.range_high > 0
+
+    @property
+    def range_display(self) -> str:
+        """The estimate as text, e.g. '₹9,000 – ₹14,000'.
+
+        Falls back to the old single total for records saved before ranges
+        existed, and to an empty string when there is nothing to show.
+        """
+        from core.cost import money
+
+        if self.has_range:
+            return _format_range(self.range_low, self.range_high)
+        if self.total > 0:
+            return money(float(self.total))
+        return ""
+
+    @property
+    def subtotal_range(self) -> str:
+        """The sum of the cost lines, before GST, as a range."""
+        return _format_range(self.subtotal_low, self.subtotal_high)
+
+    @property
+    def gst_range(self) -> str:
+        """GST on the subtotal, as a range."""
+        return _format_range(self.gst_low, self.gst_high)
+
+    @property
+    def needs_rerun(self) -> bool:
+        """A completed record with damage but no stored ranges.
+
+        It was saved before range pricing existed. Re-running the assessment from
+        the admin gives it ranges; its old single figures are not shown as the
+        estimate any more.
+        """
+        return (self.status == self.Status.COMPLETE
+                and not self.has_range
+                and self.total > 0)
+
+    @property
     def view_count(self) -> int:
         return len(self.images.all())
 
@@ -250,7 +336,7 @@ class VehicleImage(models.Model):
                              default=DEFAULT_ANGLE)
     # Which component this shot contains. Defaulted from the angle at upload
     # (a front shot is usually the front bumper) but always editable, because
-    # the panel sets the part price and a wrong one costs real money.
+    # the panel sets the price and a wrong one costs real money.
     panel = models.CharField(max_length=20, choices=PANEL_CHOICES,
                              default=DEFAULT_PANEL)
 
@@ -357,10 +443,10 @@ class DamageDetection(models.Model):
 
 
 class CostLine(models.Model):
-    """One line of the quotation: a damage type, its repair action, its price.
+    """One line of the quotation: a damage type, its repair action, its price range.
 
     Attached to the inspection rather than to a photograph, because the estimate
-    is priced once across every view. A line that said "front bumper, replace"
+    is priced once across every view. A line that said "front bumper, repair"
     could not honestly be assigned to the front shot or the front-left shot when
     both showed the damage that justified it.
     """
@@ -379,6 +465,12 @@ class CostLine(models.Model):
     action = models.CharField(max_length=120)
     instances = models.PositiveIntegerField(default=1)
 
+    # The line's price range, before GST. This is what is presented.
+    line_low = models.DecimalField(**MONEY)
+    line_high = models.DecimalField(**MONEY)
+
+    # DEPRECATED single-figure columns (see the module docstring). No longer
+    # filled; kept so old records keep loading.
     part_cost = models.DecimalField(**MONEY)
     labour_cost = models.DecimalField(**MONEY)
     paint_cost = models.DecimalField(**MONEY)
@@ -386,9 +478,9 @@ class CostLine(models.Model):
                                       default=Decimal("0.00"))
 
     class Meta:
-        # Insertion order. core.cost pricing emits the most expensive line
-        # first - the line that justified buying the part - and that ordering
-        # carries meaning, so it is preserved rather than re-sorted here.
+        # Insertion order. core.cost emits the dearest line first - the line that
+        # drives the bill - and that ordering carries meaning, so it is preserved
+        # rather than re-sorted here.
         ordering = ["pk"]
         verbose_name = "cost line"
 
@@ -397,4 +489,11 @@ class CostLine(models.Model):
 
     @property
     def subtotal(self) -> Decimal:
-        return self.part_cost + self.labour_cost + self.paint_cost
+        """Midpoint of the line's range. For code that still wants one figure;
+        never presented as the estimate."""
+        return (self.line_low + self.line_high) / 2
+
+    @property
+    def subtotal_range(self) -> str:
+        """This line's pre-GST cost as a range, e.g. '₹3,500 – ₹5,300'."""
+        return _format_range(self.line_low, self.line_high)

@@ -1,33 +1,48 @@
-"""Repair cost estimation.
+"""Repair cost estimation - repair only, and a range at every level.
 
 The formula, in words
 --------------------
-For each distinct damage type found on the vehicle:
+For each distinct damage type found on the vehicle, on its component:
 
-    part      = component part cost x segment multiplier x replace_fraction
-    labour    = segment labour rate x labour hours x instance factor
-    paint     = component paint material x segment multiplier   (if it paints)
+    line range = panel repair range
+                 x  where the severity sits inside it     (REPAIR_ACTIONS shares)
+                 x  segment price multiplier
+                 x  instance factor (repeated damage of the same type)
 
-then GST on the sum. Every input comes from a table in damage_config.py.
+Every line is a (low, high) pair, the subtotal is the sum of the lows and the sum
+of the highs, GST is added to each end, and the presented total is that range
+rounded outward to a round figure. Nothing is ever shown as a single number.
 
-Three modelling decisions that are easy to get wrong, and are the interesting
-part of this module:
+The price list is itself a low-high range per panel, so no extra percentage is
+added around the total: the source range already is the uncertainty. (The old
+model built one calculated figure and widened only the total afterwards.)
 
-1. **A panel is bought once.** If the model finds both a severe crack and a
-   severe dislocated part on the same bumper, both actions say "replace the
-   part" - but you buy one bumper. Part cost therefore takes the *maximum*
-   replace_fraction per component, never the sum.
+Decisions that are easy to get wrong
+------------------------------------
 
-2. **A panel is painted once.** Same argument: paint material is charged once
-   per component, not once per scratch.
+1. **A panel is prepared and painted once.** If one door has a dent and a crack,
+   the dearest damage is charged in full and the others at INSTANCE_FACTOR (40%),
+   because masking, prep and paint-booth time are shared. Lamps and glass are the
+   exception: they are replaced, so each is a separate part.
 
-3. **Labour does add up, but sublinearly.** Two dents on one door genuinely take
-   longer than one, yet the masking, prep and paint booth time is shared. The
-   second and later instances are charged at 40% (INSTANCE_FACTOR), capped, so a
-   noisy detection with eleven overlapping scratch polygons cannot produce an
-   absurd bill.
+2. **Repeated damage of one type adds up, but sublinearly.** Two dents on one door
+   take longer than one, yet prep and paint are shared. The second and later
+   instances are charged at 40% (INSTANCE_FACTOR), capped at INSTANCE_FACTOR_CAP,
+   so a noisy detection with eleven overlapping scratch polygons cannot produce an
+   absurd bill. 40% is a judgement, not a measurement.
 
-Point 3 is the one to be candid about: 40% is a judgement, not a measurement.
+3. **A multi-panel entry is priced for every panel it covers.** The "front + rear
+   door" range in damage_config is already the two doors added together.
+
+4. **Severity places a line inside the panel's range.** Minor damage sits in the
+   lower part, severe in the upper part (see REPAIR_ACTIONS). The slices are a
+   judgement, so the report says so.
+
+Repair only
+-----------
+The project estimates repair, not replacement. Lamps and glass cannot be repaired,
+so they are priced from the list's replacement table and labelled as replacement;
+a flat tyre is not in the list and is left unpriced with a note.
 
 Why the user-selected panel is sometimes overridden
 ---------------------------------------------------
@@ -40,36 +55,37 @@ Pricing across several photographs
 ----------------------------------
 An inspection carries a walk-around: front, front-left, left, and so on. Each
 photograph is detected separately, but they must be priced *together*, because
-the three decisions above are properties of the vehicle, not of a photograph. A
-front shot and a front-left shot both showing the same bumper would otherwise buy
-two bumpers - the very mistake point 1 exists to prevent, reintroduced one level
-up. `estimate_combined` therefore merges the views first and prices once.
+the decisions above are properties of the vehicle, not of a photograph.
+`estimate_combined` therefore merges the views first and prices once.
 
-Merging raises a problem worth being candid about: the same physical dent
-appearing in two overlapping photographs cannot be told apart from two separate
-dents without re-identifying damage across views, which this system does not
-attempt. Merging therefore takes the **maximum** of the per-view figures rather
-than the sum. That is the conservative reading - it can understate genuinely
-separate damage on one component, but it cannot invent damage that is not there,
-and an estimate that quietly doubles because the owner took two photographs of
-one scratch would be indefensible.
+Merging takes the **maximum** of the per-view figures rather than the sum. That is
+the conservative reading - it can understate genuinely separate damage on one
+component, but it cannot invent damage that is not there, and an estimate that
+quietly doubles because the owner took two photographs of one scratch would be
+indefensible.
 """
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 
 from .damage_config import (
     CLASS_LABELS,
+    COST_SOURCE,
     CURRENCY,
     CURRENCY_SYMBOL,
     DEFAULT_PANEL,
     DEFAULT_SEGMENT,
     GST_RATE,
     PANELS,
+    RANGE_LINE_STEP,
+    RANGE_STEP_TIERS,
     REPAIR_ACTIONS,
     SEGMENTS,
     SEVERITY_LABELS,
+    Panel,
+    RepairAction,
 )
 from .severity import worst
 
@@ -85,7 +101,8 @@ COMPONENT_OVERRIDE: dict[str, tuple[str, tuple[str, ...]]] = {
 }
 
 # Second and subsequent instances of the same damage type are charged at this
-# fraction of the labour hours, up to INSTANCE_FACTOR_CAP in total.
+# fraction, up to INSTANCE_FACTOR_CAP in total. The same fraction is used for a
+# second damage type on the same panel (shared preparation and paint).
 INSTANCE_FACTOR = 0.40
 INSTANCE_FACTOR_CAP = 2.5
 
@@ -102,6 +119,7 @@ class DamageGroup:
 
 @dataclass(frozen=True)
 class CostLine:
+    """One priced line. `low` and `high` are rupees, before GST."""
     class_name: str
     class_label: str
     severity: str
@@ -110,14 +128,13 @@ class CostLine:
     component_label: str
     action: str
     instances: int
-    part_cost: float
-    labour_cost: float
-    labour_hours: float
-    paint_cost: float
+    low: float
+    high: float
+    replacement: bool = False
 
     @property
-    def subtotal(self) -> float:
-        return self.part_cost + self.labour_cost + self.paint_cost
+    def midpoint(self) -> float:
+        return (self.low + self.high) / 2
 
 
 @dataclass(frozen=True)
@@ -126,22 +143,39 @@ class Quotation:
     panel: str = DEFAULT_PANEL
     segment: str = DEFAULT_SEGMENT
     # Every panel that contributed damage. For a single-photograph estimate this
-    # is just (panel,); for a walk-around it lists each angle's panel. `panel`
-    # is kept as-is so single-panel callers are unaffected.
+    # is just (panel,); for a walk-around it lists each angle's panel.
     panels: tuple[str, ...] = ()
-    parts_total: float = 0.0
-    labour_total: float = 0.0
-    paint_total: float = 0.0
-    subtotal: float = 0.0
-    gst: float = 0.0
-    total: float = 0.0
+    # Sums of the (already rounded) lines, and GST on each end. Not rounded
+    # further, so the page can show that lines add up to the subtotal.
+    subtotal_low: float = 0.0
+    subtotal_high: float = 0.0
+    gst_low: float = 0.0
+    gst_high: float = 0.0
+    # The presented estimate: GST-inclusive, rounded outward to a round figure.
+    # Both are 0.0 when nothing was priced.
+    low: float = 0.0
+    high: float = 0.0
     # Empty means "nothing was graded", which is the truthful default for a
-    # quotation nobody has priced yet. Django's SEVERITY_CHOICES field is
-    # `blank=True` for the same reason, and both the results page and the PDF
-    # test this for falsiness to decide between a severity badge and "None".
+    # quotation nobody has priced yet. Both the results page and the PDF test
+    # this for falsiness to decide between a severity badge and "None".
     overall_severity: str = ""
     currency: str = CURRENCY
     notes: list[str] = field(default_factory=list)
+
+    # Midpoints, for the few places that still want one figure to store (the
+    # deprecated single-figure columns). Never presented as the estimate.
+    @property
+    def subtotal(self) -> float:
+        return (self.subtotal_low + self.subtotal_high) / 2
+
+    @property
+    def gst(self) -> float:
+        return (self.gst_low + self.gst_high) / 2
+
+    @property
+    def total(self) -> float:
+        return ((self.subtotal_low + self.gst_low)
+                + (self.subtotal_high + self.gst_high)) / 2
 
 
 def resolve_component(class_name: str, user_panel: str) -> str:
@@ -154,10 +188,69 @@ def resolve_component(class_name: str, user_panel: str) -> str:
 
 
 def instance_factor(instances: int) -> float:
-    """Labour multiplier for repeated damage of the same type."""
+    """Multiplier for repeated damage of the same type."""
     if instances <= 1:
         return 1.0
     return min(1.0 + INSTANCE_FACTOR * (instances - 1), INSTANCE_FACTOR_CAP)
+
+
+def range_step_for(total: float) -> int:
+    """Rounding step for a total: the step of the last tier it reaches.
+
+    Rs. 500 below Rs. 20,000 and Rs. 1,000 from there up (RANGE_STEP_TIERS), so
+    the ends of the range are round figures at the scale of the estimate.
+    """
+    step = RANGE_STEP_TIERS[0][1]
+    for threshold, tier_step in RANGE_STEP_TIERS:
+        if total >= threshold:
+            step = tier_step
+    return step
+
+
+def range_step_text() -> str:
+    """The rounding rule in words, for the notes and the report."""
+    parts = []
+    for i, (threshold, step) in enumerate(RANGE_STEP_TIERS):
+        if i + 1 < len(RANGE_STEP_TIERS):
+            parts.append(f"Rs. {step:,} below Rs. {int(RANGE_STEP_TIERS[i + 1][0]):,}")
+        else:
+            parts.append(f"Rs. {step:,} from Rs. {int(threshold):,} up")
+    return ", ".join(parts)
+
+
+def _round_down(amount: float, step: float) -> float:
+    return float(math.floor(amount / step) * step)
+
+
+def _round_up(amount: float, step: float) -> float:
+    return float(math.ceil(amount / step) * step)
+
+
+def _action_range(action: RepairAction, comp: Panel,
+                  instances: int) -> tuple[float, float] | None:
+    """(low, high) for one action on one component, before the segment
+    multiplier. None when the price list has no figure for it."""
+    if action.mode == "unpriced":
+        return None
+
+    if action.mode == "replace":
+        if comp.replace_high <= 0:
+            return None
+        # One part is bought however many instances the model found.
+        return comp.replace_low, comp.replace_high
+
+    # Both remaining modes are repairs, so the component must have a repair price.
+    if comp.repair_high <= 0:
+        return None
+    factor = instance_factor(instances)
+
+    if action.mode == "flat":
+        n = comp.panel_count
+        return action.flat_low * n * factor, action.flat_high * n * factor
+
+    span = comp.repair_high - comp.repair_low
+    return ((comp.repair_low + span * action.low_share) * factor,
+            (comp.repair_low + span * action.high_share) * factor)
 
 
 def estimate(groups: list[DamageGroup],
@@ -171,8 +264,7 @@ def estimate(groups: list[DamageGroup],
     database.
 
     A thin wrapper: it resolves each group's component from the one panel given,
-    then hands the pairs to `_price`. Keeping it means every existing caller and
-    test is unaffected by multi-view pricing.
+    then hands the pairs to `_price`.
     """
     pairs = [(resolve_component(g.class_name, panel), g) for g in groups]
     return _price(pairs, segment=segment, panel=panel, panels=(panel,))
@@ -186,14 +278,12 @@ def estimate_combined(views: list[tuple[str, list[DamageGroup]]],
     that shot contains, and the groups the pipeline found in it.
 
     Merging happens before pricing, keyed on (damage class, component), because
-    "a panel is bought once" and "a panel is painted once" are facts about the
-    vehicle and would be broken by pricing each photograph on its own.
+    "a panel is prepared once" is a fact about the vehicle and would be broken by
+    pricing each photograph on its own.
 
     Where a class/component pair appears in more than one view, the merged group
     takes the worst severity but the **maximum** instance count and area, not the
-    sum. See the module docstring: two photographs of one scratch must not cost
-    twice as much as one, and this system cannot tell that case apart from two
-    genuinely separate scratches.
+    sum. See the module docstring.
     """
     merged: dict[tuple[str, str], DamageGroup] = {}
     seen_in: dict[tuple[str, str], int] = {}
@@ -252,9 +342,10 @@ def _price(pairs: list[tuple[str, DamageGroup]],
     """The money. One (component, group) pair per damage type to be priced.
 
     Taking pre-resolved components rather than a panel is what lets one estimate
-    span several photographs while still charging for each component once.
+    span several photographs while still charging each component once.
     """
     seg = SEGMENTS.get(segment) or SEGMENTS[DEFAULT_SEGMENT]
+    mult = seg.price_multiplier
     notes: list[str] = []
 
     if not pairs:
@@ -262,114 +353,135 @@ def _price(pairs: list[tuple[str, DamageGroup]],
             panel=panel, segment=segment, panels=panels,
             # Empty, not "minor". Nothing was detected, so there is nothing to
             # grade, and "minor" would be a claim the measurement does not
-            # support - the results page and the PDF would both print a severity
-            # badge for a car the model found undamaged.
+            # support.
             overall_severity="",
             notes=["No damage detected, so no repair cost is estimated."]
                   + list(extra_notes),
         )
 
-    # Pass 1: work out, per component, the largest replacement fraction any
-    # single action calls for, and whether anything paints it. This is what
-    # stops us buying the same bumper twice.
-    max_replace: dict[str, float] = {}
-    paints: dict[str, bool] = {}
+    overall = worst(g.severity for _, g in pairs)
+
+    # Pass 1: a (low, high) per damage group, grouped by component.
+    priced: dict[str, list[tuple[float, float, DamageGroup, RepairAction]]] = {}
     for component, group in pairs:
         action = REPAIR_ACTIONS.get((group.class_name, group.severity))
+        label = CLASS_LABELS.get(group.class_name, group.class_name)
         if action is None:
             notes.append(
                 f"No repair action defined for {group.class_name} / "
                 f"{group.severity}; skipped."
             )
             continue
-        max_replace[component] = max(max_replace.get(component, 0.0),
-                                     action.replace_fraction)
-        paints[component] = paints.get(component, False) or action.paints
-
-    # Pass 2: build the lines. Part and paint cost are attributed to the line
-    # that justified them, and only once per component, so the totals add up to
-    # the sum of the lines - a report whose lines do not sum to its total is
-    # worse than no report.
-    part_charged: set[str] = set()
-    paint_charged: set[str] = set()
-    lines: list[CostLine] = []
-
-    def replace_fraction_of(pair: tuple[str, DamageGroup]) -> float:
-        action = REPAIR_ACTIONS.get((pair[1].class_name, pair[1].severity))
-        return action.replace_fraction if action else -1.0
-
-    # Most expensive first, so the line that justifies buying the part is the
-    # line charged for it, and the reader sees the bill's driver at the top.
-    # Python's sort is stable, so ties keep the order they arrived in.
-    ordered = sorted(pairs, key=replace_fraction_of, reverse=True)
-
-    for component, group in ordered:
-        action = REPAIR_ACTIONS.get((group.class_name, group.severity))
-        if action is None:
-            continue
         comp = PANELS.get(component) or PANELS[DEFAULT_PANEL]
-
-        part_cost = 0.0
-        if component not in part_charged and max_replace.get(component, 0.0) > 0:
-            part_cost = comp.part_cost * seg.part_multiplier * max_replace[component]
-            part_charged.add(component)
-
-        paint_cost = 0.0
-        if (component not in paint_charged and paints.get(component)
-                and comp.paintable):
-            paint_cost = comp.paint_cost * seg.part_multiplier
-            paint_charged.add(component)
-
-        hours = action.labour_hours * instance_factor(group.instances)
-        labour_cost = seg.labour_rate * hours
-
-        lines.append(CostLine(
-            class_name=group.class_name,
-            class_label=CLASS_LABELS.get(group.class_name, group.class_name),
-            severity=group.severity,
-            severity_label=SEVERITY_LABELS.get(group.severity, group.severity),
-            component=component,
-            component_label=comp.label,
-            action=action.description,
-            instances=group.instances,
-            part_cost=round(part_cost, 2),
-            labour_cost=round(labour_cost, 2),
-            labour_hours=round(hours, 2),
-            paint_cost=round(paint_cost, 2),
-        ))
-
-    parts_total = round(sum(l.part_cost for l in lines), 2)
-    labour_total = round(sum(l.labour_cost for l in lines), 2)
-    paint_total = round(sum(l.paint_cost for l in lines), 2)
-    subtotal = round(parts_total + labour_total + paint_total, 2)
-    gst = round(subtotal * GST_RATE, 2)
-
-    for component in sorted(part_charged):
-        if max_replace[component] < 1.0:
+        rng = _action_range(action, comp, group.instances)
+        if rng is None:
             notes.append(
-                f"{PANELS[component].label}: repaired rather than replaced, so "
-                f"only {max_replace[component]:.0%} of the part price is charged."
+                f"{label} on {comp.label.lower()}: not covered by the price "
+                f"list, so it is not included in this estimate."
             )
+            continue
+        priced.setdefault(component, []).append(
+            (rng[0] * mult, rng[1] * mult, group, action))
 
+    # Pass 2: build the lines. On one component the dearest damage is charged in
+    # full and the rest at INSTANCE_FACTOR (the panel is prepared and painted
+    # once). A replaced part is always charged in full.
+    lines: list[CostLine] = []
+    shared_used = False
+    for component, items in priced.items():
+        comp = PANELS.get(component) or PANELS[DEFAULT_PANEL]
+        items.sort(key=lambda t: t[1], reverse=True)       # dearest first
+        for rank, (lo, hi, group, action) in enumerate(items):
+            replacement = action.mode == "replace"
+            share = 1.0 if (rank == 0 or replacement) else INSTANCE_FACTOR
+            if share < 1.0:
+                shared_used = True
+            lines.append(CostLine(
+                class_name=group.class_name,
+                class_label=CLASS_LABELS.get(group.class_name, group.class_name),
+                severity=group.severity,
+                severity_label=SEVERITY_LABELS.get(group.severity, group.severity),
+                component=component,
+                component_label=comp.label,
+                action=action.description,
+                instances=group.instances,
+                low=_round_down(lo * share, RANGE_LINE_STEP),
+                high=_round_up(hi * share, RANGE_LINE_STEP),
+                replacement=replacement,
+            ))
+
+    lines.sort(key=lambda l: (-l.high, l.class_name, l.component))
+
+    if not lines:
+        return Quotation(
+            panel=panel, segment=segment, panels=panels,
+            overall_severity=overall,
+            notes=notes + ["Nothing in this inspection could be priced from the "
+                           "price list, so no cost range is given."]
+                  + list(extra_notes),
+        )
+
+    subtotal_low = sum(l.low for l in lines)
+    subtotal_high = sum(l.high for l in lines)
+    gst_low = round(subtotal_low * GST_RATE, 2)
+    gst_high = round(subtotal_high * GST_RATE, 2)
+    total_low = subtotal_low + gst_low
+    total_high = subtotal_high + gst_high
+    step = range_step_for(total_high)
+    low = _round_down(total_low, step)
+    high = _round_up(total_high, step)
+
+    # ASCII "Rs." on purpose: these notes are stored and printed in the PDF, whose
+    # built-in font has no rupee-sign glyph (it would print as a black box).
+    notes.append(
+        f"Every price is a range taken from the rate card: {COST_SOURCE} "
+        f"Where a line falls inside its range follows the severity (minor in the "
+        f"lower part, severe in the upper part); that placement is a judgement, "
+        f"not a measured figure."
+    )
     if any(l.instances > 1 for l in lines):
         notes.append(
-            f"Repeated damage of the same type is charged at "
-            f"{INSTANCE_FACTOR:.0%} labour for each instance after the first, "
-            f"because preparation and paint-booth time are shared."
+            f"Repeated damage of the same type is charged at {INSTANCE_FACTOR:.0%} "
+            f"for each instance after the first, because preparation and paint "
+            f"time are shared."
         )
+    if shared_used:
+        notes.append(
+            f"Where one panel has several damage types, the dearest is charged in "
+            f"full and the others at {INSTANCE_FACTOR:.0%}, because the panel is "
+            f"prepared and painted once."
+        )
+    multi_panel = sorted(
+        {l.component for l in lines
+         if PANELS.get(l.component) and PANELS[l.component].panel_count > 1}
+    )
+    for component in multi_panel:
+        notes.append(
+            f"{PANELS[component].label}: priced as "
+            f"{PANELS[component].panel_count} panels, so the range covers both."
+        )
+    if any(l.replacement for l in lines):
+        notes.append(
+            "Lamp and glass damage cannot be repaired, so those lines are "
+            "replacement prices. Everything else is repair only."
+        )
+    notes.append(
+        f"The total includes GST at {GST_RATE:.0%} on both ends of the range and "
+        f"is rounded outward to round figures ({range_step_text()})."
+    )
 
     return Quotation(
         lines=lines,
         panel=panel,
         segment=segment,
         panels=panels,
-        parts_total=parts_total,
-        labour_total=labour_total,
-        paint_total=paint_total,
-        subtotal=subtotal,
-        gst=gst,
-        total=round(subtotal + gst, 2),
-        overall_severity=worst(g.severity for _, g in pairs),
+        subtotal_low=subtotal_low,
+        subtotal_high=subtotal_high,
+        gst_low=gst_low,
+        gst_high=gst_high,
+        low=low,
+        high=high,
+        overall_severity=overall,
         notes=notes + list(extra_notes),
     )
 
@@ -395,3 +507,8 @@ def money(amount: float) -> str:
             parts.insert(0, head)
         whole = ",".join(parts + [tail])
     return f"{'-' if negative else ''}{CURRENCY_SYMBOL}{whole}"
+
+
+def money_range(low: float, high: float) -> str:
+    """Format a low/high pair, e.g. '₹9,000 – ₹14,000'."""
+    return f"{money(low)} – {money(high)}"

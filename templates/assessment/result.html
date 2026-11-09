@@ -13,6 +13,12 @@ Note the `u` suffix on every floatformat used inside a style attribute -
 `floatformat:"2u"` forces unlocalized output. Under a locale that writes decimals
 with a comma, plain floatformat would emit `width: 43,2%`, which is invalid CSS
 and would silently collapse the meter.
+
+Every cost figure on this page is a range: each line (line.subtotal_range), the
+subtotal (inspection.subtotal_range), GST (inspection.gst_range) and the payable
+total (inspection.range_display). They are the same stored ranges the PDF prints.
+Records saved before range pricing existed have no stored range; the page says so
+instead of showing a single exact figure (inspection.needs_rerun).
 {% endcomment %}
 
 {% block title %}{{ inspection.docket_number }} &middot; Assessment{% endblock %}
@@ -46,6 +52,16 @@ and would silently collapse the meter.
     The record and every uploaded photograph were kept. Once the cause is fixed, run
     <b>Re-run assessment</b> on this record from the admin rather than re-uploading,
     so the docket number stays the same.
+  </p>
+</div>
+{% endif %}
+
+{% if inspection.needs_rerun %}
+<div class="callout danger" style="margin-bottom:24px" role="alert">
+  <p><b>This record was saved before range pricing.</b></p>
+  <p>
+    It has no cost range stored. Run <b>Re-run assessment</b> on this record from
+    the admin to price it as a range; the docket number stays the same.
   </p>
 </div>
 {% endif %}
@@ -111,10 +127,12 @@ and would silently collapse the meter.
 
       <div class="headline">
         <span class="label">Estimated payable</span>
-        <span class="figure">{{ inspection.total|rupees }}</span>
+        <span class="figure">
+          {% if inspection.has_range %}{{ inspection.range_display }}{% else %}&mdash;{% endif %}
+        </span>
         <span class="figure-note">
-          Includes GST at {{ gst_percent|floatformat:0 }}%. Indicative estimate from a
-          fixed reference rate card, not a garage quotation.
+          {% if inspection.has_range %}A range built from the rate card's low and high prices, rounded outward to round figures. {% endif %}Includes GST at {{ gst_percent|floatformat:0 }}%. Indicative estimate from a
+          published repair price list, not a garage quotation.
         </span>
       </div>
     </div>
@@ -200,9 +218,11 @@ and would silently collapse the meter.
             <td class="num">{{ det.area_percent|floatformat:2 }}%</td>
             <td class="num">{{ det.confidence|floatformat:2 }}</td>
             <td>
-              {# The signature element: the measurement drawn against the two
-                 thresholds that produced the verdict, so the grade can be
-                 checked rather than trusted. #}
+              {% comment %}
+              The signature element: the measurement drawn against the two
+              thresholds that produced the verdict, so the grade can be
+              checked rather than trusted.
+              {% endcomment %}
               <div class="meter">
                 <div class="meter-track" role="img"
                      aria-label="Measured area {{ det.area_percent|floatformat:2 }} percent, graded {{ det.get_severity_display }}{% if item.minor_max_pct %}; minor up to {{ item.minor_max_pct|floatformat:2 }} percent, moderate up to {{ item.moderate_max_pct|floatformat:2 }} percent, severe above that{% endif %}.">
@@ -258,9 +278,10 @@ and would silently collapse the meter.
   <div class="table-scroll">
     <table class="data">
       <caption>
-        One line per repair action. Where several regions share an action, the
-        additional ones are charged at a reduced rate rather than in full &mdash;
-        a second dent on the same panel does not cost a second panel.{% if multi_view %}
+        One line per repair action, each shown as a range from the rate card. Where
+        several regions share a panel, the additional ones are charged at a reduced
+        rate rather than in full &mdash; a second dent on the same panel does not
+        cost a second panel.{% if multi_view %}
         Across photographs, damage of the same type on the same part is counted
         once at its highest observed count, because two overlapping views of one
         dent cannot be told apart from two separate dents.{% endif %}
@@ -272,11 +293,7 @@ and would silently collapse the meter.
           <th scope="col">Action</th>
           <th scope="col">Component</th>
           <th scope="col" class="num">Qty</th>
-          <th scope="col" class="num">Hours</th>
-          <th scope="col" class="num">Parts</th>
-          <th scope="col" class="num">Labour</th>
-          <th scope="col" class="num">Paint</th>
-          <th scope="col" class="num">Line total</th>
+          <th scope="col" class="num">Estimated cost (excl. GST)</th>
         </tr>
       </thead>
       <tbody>
@@ -287,11 +304,7 @@ and would silently collapse the meter.
           <td>{{ line.action }}</td>
           <td>{{ line.get_component_display }}</td>
           <td class="num">{{ line.instances }}</td>
-          <td class="num">{{ line.labour_hours|floatformat:2 }}</td>
-          <td class="num">{{ line.part_cost|rupees }}</td>
-          <td class="num">{{ line.labour_cost|rupees }}</td>
-          <td class="num">{{ line.paint_cost|rupees }}</td>
-          <td class="num strong">{{ line.subtotal|rupees }}</td>
+          <td class="num strong">{{ line.subtotal_range }}</td>
         </tr>
         {% endfor %}
       </tbody>
@@ -301,19 +314,22 @@ and would silently collapse the meter.
   <div class="card-body">
     <table class="totals">
       <tbody>
-        <tr><th scope="row">Parts</th><td>{{ inspection.parts_total|rupees }}</td></tr>
-        <tr><th scope="row">Labour</th><td>{{ inspection.labour_total|rupees }}</td></tr>
-        <tr><th scope="row">Paint and materials</th><td>{{ inspection.paint_total|rupees }}</td></tr>
-        <tr class="rule-above"><th scope="row">Subtotal</th><td>{{ inspection.subtotal|rupees }}</td></tr>
-        <tr><th scope="row">GST @ {{ gst_percent|floatformat:0 }}%</th><td>{{ inspection.gst_amount|rupees }}</td></tr>
-        <tr class="payable"><th scope="row">Estimated payable</th><td>{{ inspection.total|rupees }}</td></tr>
+        <tr><th scope="row">Repair subtotal (excl. GST)</th><td>{{ inspection.subtotal_range|default:"&mdash;" }}</td></tr>
+        <tr><th scope="row">GST @ {{ gst_percent|floatformat:0 }}%</th><td>{{ inspection.gst_range|default:"&mdash;" }}</td></tr>
+        <tr class="payable"><th scope="row">Estimated payable</th><td>{% if inspection.has_range %}{{ inspection.range_display }}{% else %}&mdash;{% endif %}</td></tr>
       </tbody>
     </table>
+    <p class="note" style="margin-top:12px">
+      The subtotal is the sum of the line ranges above. The estimated payable is
+      the subtotal plus GST on both ends, rounded outward to round figures, so it
+      can be slightly wider than subtotal plus GST.
+    </p>
   </div>
   {% else %}
   <div class="card-body">
     <p class="note" style="margin:0">
-      Nothing to price &mdash; no damage was detected on these photographs.
+      Nothing to price &mdash; no damage was detected on these photographs, or the
+      damage found is not covered by the price list.
     </p>
   </div>
   {% endif %}
@@ -341,9 +357,11 @@ and would silently collapse the meter.
     <span class="hint">Where these numbers came from</span>
   </div>
   <div class="card-body">
-    {# Frame sizes and reference areas are per photograph, so they are shown with
-       the photograph they belong to, above. What is left here is what applies to
-       the record as a whole. #}
+    {% comment %}
+    Frame sizes and reference areas are per photograph, so they are shown with
+    the photograph they belong to, above. What is left here is what applies to
+    the record as a whole.
+    {% endcomment %}
     <dl class="slab" style="max-width:520px">
       <dt>Model</dt>
       <dd>

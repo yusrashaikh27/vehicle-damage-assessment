@@ -1,0 +1,706 @@
+{% extends "base.html" %}
+{% load static %}
+{% comment %}
+The front page, and deliberately the honest one.
+
+The first question anyone asks about a project like this is "how accurate is
+it", so the measured figure is the first thing on the page and the limitation
+that qualifies it is directly underneath - not folded into a disclosure, not on
+a separate page, and not below anything promotional.
+
+Every number here comes from `core/evaluation.py`, which is transcribed once
+from docs/RESULTS.md and validates itself at import. Nothing on this page is
+typed in by hand, so nothing on this page can drift from the recorded run.
+
+Three framing rules are enforced by what this template chooses to show:
+
+* mask, never box. Severity is computed from polygon area, so mask mAP is the
+  number the pipeline actually depends on. Box mAP is higher (0.575/0.427) and
+  is deliberately shown only inside the disclosure, labelled as unused.
+* test, never valid. The validation split chose the checkpoint, so it stopped
+  being held out. Its figures appear only as a generalisation comparison.
+* tire_flat is rendered with an approximation marker, because 32 instances do
+  not support three decimal places.
+
+Two sources of numbers appear on this page and the page says which is which:
+the headline and the first per-class table are the figures recorded on the
+Colab T4; the train/validation/test table, the precision/recall/F1 table and
+the confusion matrix come from re-evaluating the same best.pt locally, because
+the Colab results folder was not kept.
+
+The "How an assessment is produced" list wraps each step's title and text in a
+single div. The list is a two-column grid (number, then content); without the
+wrapper the bold title and the loose text become separate grid items and the
+text lands in the narrow number column, wrapping one word per line.
+
+No {# #} comments anywhere in this file. That syntax is single-line only and a
+multi-line one renders as visible text on the page - it has already happened
+here twice.
+{% endcomment %}
+
+{% block title %}Vehicle Damage Assessment and Cost Estimator{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div>
+    <span class="eyebrow">Instance segmentation &middot; measured severity &middot; itemised estimate</span>
+    <h1>External vehicle damage, detected and priced from a photograph</h1>
+    <p>
+      Upload the angles that show the damage. Each damaged region is segmented
+      as a polygon, graded by the share of the frame it covers against
+      documented thresholds, and priced as a range from a published repair
+      price list with {{ gst_percent|floatformat:0 }}% GST. Severity is measured,
+      not predicted &mdash; the model outlines the damage and arithmetic does the
+      grading, so every verdict can be checked rather than trusted.
+    </p>
+  </div>
+  <a class="btn btn-signal" href="{% url 'assessment:upload' %}">Run an inspection</a>
+</div>
+
+{% comment %}
+The headline strip. Mask figures only, and both of them: mAP50 alone is the
+flattering half of the pair, and quoting it on its own is the single easiest way
+to overstate this system.
+{% endcomment %}
+<div class="stat-strip">
+  <div class="stat">
+    <span class="label">Mask mAP<span class="sub">50</span></span>
+    <span class="figure">{{ ev.MASK_MAP50|floatformat:3 }}</span>
+    <span class="statnote">Detection found, loose overlap</span>
+  </div>
+  <div class="stat">
+    <span class="label">Mask mAP<span class="sub">50-95</span></span>
+    <span class="figure">{{ ev.MASK_MAP50_95|floatformat:3 }}</span>
+    <span class="statnote">Outline correct, strict overlap</span>
+  </div>
+  <div class="stat">
+    <span class="label">Held-out test set</span>
+    <span class="figure">{{ ev.TEST_IMAGES }}</span>
+    <span class="statnote">images, {{ ev.TEST_INSTANCES }} instances</span>
+  </div>
+  <div class="stat">
+    <span class="label">Inspections recorded</span>
+    <span class="figure">{{ inspection_count }}</span>
+    <span class="statnote">stored with the figures they produced</span>
+  </div>
+</div>
+
+<section class="card" style="margin-bottom:var(--gap)">
+  <div class="card-head">
+    <h2>Measured accuracy, per damage class</h2>
+    <span class="hint">{{ ev.MODEL_NAME }} &middot; held-out test split &middot; {{ ev.EVALUATED_ON }}</span>
+  </div>
+  <div class="card-body">
+    <p class="lede">
+      Two measurements of the same thing at different strictness. <b>mAP50</b>
+      asks only whether the damage was found; <b>mAP50-95</b> also asks whether
+      it was outlined correctly. The distance between them is the interesting
+      part, because this pipeline consumes the outline: polygon area becomes
+      severity, and severity becomes the rupee figure.
+    </p>
+
+    <div class="chart-key">
+      <span class="key-item"><span class="key-dot dot-loose"></span>mAP50 &mdash; found</span>
+      <span class="key-item"><span class="key-dot dot-strict"></span>mAP50-95 &mdash; found and outlined</span>
+      <span class="key-item key-note">Longer bar means worse outlines</span>
+    </div>
+
+    {% comment %}
+    A dumbbell, not a pair of bar charts. The gap is the finding, and a gap is
+    a length the eye reads directly - two separate bars would make the reader
+    subtract. One hue in two shades because these are two measurements of one
+    quantity, not two independent series.
+
+    All geometry arrives precomputed from the view in SVG user units. There is
+    no width attribute, only a viewBox, so the browser scales the whole chart
+    to the card. Every shape is self-closed: the template checker parses this
+    markup for element balance and an unclosed <circle> reads as an error.
+    {% endcomment %}
+    <svg class="chart-dumbbell"
+         viewBox="0 0 {{ accuracy_chart.width }} {{ accuracy_chart.height }}"
+         role="img"
+         aria-label="Per-class accuracy on the held-out test split. Every figure is listed exactly in the table below this chart.">
+      {% for tick in accuracy_chart.ticks %}
+      <line class="chart-grid" x1="{{ tick.x }}" y1="{{ accuracy_chart.grid_top }}" x2="{{ tick.x }}" y2="{{ accuracy_chart.grid_bottom }}" />
+      {% endfor %}
+
+      <line class="chart-axis" x1="{{ accuracy_chart.plot_x0 }}" y1="{{ accuracy_chart.axis_y }}" x2="{{ accuracy_chart.plot_x1 }}" y2="{{ accuracy_chart.axis_y }}" />
+
+      {% for tick in accuracy_chart.ticks %}
+      <text class="chart-tick" x="{{ tick.x }}" y="{{ accuracy_chart.tick_label_y }}" text-anchor="middle">{{ tick.label }}</text>
+      {% endfor %}
+
+      {% for row in accuracy_chart.rows %}
+      <text class="chart-class" x="{{ accuracy_chart.label_col_x }}" y="{{ row.y }}" text-anchor="end" dominant-baseline="middle">{{ row.result.label }}</text>
+      <line class="chart-link" x1="{{ row.x_strict }}" y1="{{ row.y }}" x2="{{ row.x_loose }}" y2="{{ row.y }}" />
+      <circle class="chart-dot dot-strict" cx="{{ row.x_strict }}" cy="{{ row.y }}" r="4.5" />
+      <circle class="chart-dot dot-loose" cx="{{ row.x_loose }}" cy="{{ row.y }}" r="4.5" />
+      <text class="chart-value" x="{{ row.label_x }}" y="{{ row.y }}" text-anchor="{{ row.label_anchor }}" dominant-baseline="middle">{% if row.approximate %}&#8776;{% endif %}{{ row.result.map50|floatformat:2 }}</text>
+      {% endfor %}
+    </svg>
+
+    <div class="callout danger">
+      <p>
+        <b>The limitation that qualifies every estimate on this site.</b>
+        {{ unreliable_share|floatformat:1 }}% of test instances belong to classes
+        whose polygon area is unreliable <em>even when the detection is
+        correct</em>. Boundary quality &mdash; mAP50-95 divided by mAP50 &mdash;
+        is 0.34 for cracks, 0.41 for dislocated parts, 0.45 for scratches and
+        0.50 for dents, and those four classes are most of the data.
+      </p>
+      <p>
+        Because severity is area and cost is severity, that outline error lands
+        directly in the rupee figure. <b>Cracks</b> are the worst per instance
+        at mAP50 {{ ev.CLASS_RESULTS.0.map50|floatformat:3 }};
+        <b>scratches</b> are the worst by exposure, at
+        {{ ev.CLASS_RESULTS.2.share_percent|floatformat:1 }}% of all test
+        instances. Estimates here are indicative, and this is why.
+      </p>
+    </div>
+
+    <div class="table-scroll" style="margin-top:18px">
+      <table class="data">
+        <caption>
+          Ordered worst to best by mask mAP50 &mdash; the limitation reads first.
+          Boundary is mAP50-95 &divide; mAP50: how much of the score survives a
+          stricter overlap requirement, which is the same thing as how well the
+          damage is outlined.
+        </caption>
+        <thead>
+          <tr>
+            <th scope="col">Damage class</th>
+            <th scope="col" class="num">mAP50</th>
+            <th scope="col" class="num">mAP50-95</th>
+            <th scope="col" class="num">Boundary</th>
+            <th scope="col">Area from polygon</th>
+            <th scope="col" class="num">Test</th>
+            <th scope="col" class="num">Share</th>
+            <th scope="col" class="num">Train</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for c in class_results %}
+          <tr>
+            <td><b>{{ c.label }}</b></td>
+            <td class="num">{% if c.name in ev.APPROXIMATE %}&#8776;{% endif %}{{ c.map50|floatformat:3 }}</td>
+            <td class="num">{{ c.map50_95|floatformat:3 }}</td>
+            <td class="num">{{ c.boundary|floatformat:2 }}</td>
+            <td>
+              {% if c.area_unreliable %}
+              <span class="chip chip-severe">Unreliable</span>
+              {% else %}
+              <span class="chip chip-minor">Usable</span>
+              {% endif %}
+            </td>
+            <td class="num">{{ c.test_instances }}</td>
+            <td class="num">{{ c.share_percent|floatformat:1 }}%</td>
+            <td class="num">{{ c.train_instances }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+
+    <p class="footnote">
+      &#8776; marks a figure the sample size does not support to three decimals.
+      Tyre flat is measured on {{ ev.CLASS_RESULTS.6.test_instances }} test
+      instances &mdash; recall 0.906 is 29 of 32, with a 95% Wilson interval of
+      [0.76, 0.97]. The point estimate reproduced across two independent
+      32-instance samples, but it is written &#8776;0.96 rather than 0.963.
+    </p>
+
+    <details class="disclosure">
+      <summary>Why these figures and not the higher ones</summary>
+      <div class="disclosure-body">
+        <p>
+          <b>Mask, not box.</b> Box mAP for this run is
+          {{ ev.BOX_MAP50|floatformat:3 }} / {{ ev.BOX_MAP50_95|floatformat:3 }},
+          which is higher than the mask figures above. It is recorded in
+          <code>core/evaluation.py</code> purely so nobody quotes it by
+          accident: a bounding box has no usable area for this pipeline, since a
+          diagonal scratch fills only about 15% of its box. Severity comes from
+          the polygon, so mask mAP is the honest description of the system.
+        </p>
+        <p>
+          <b>Test, not validation.</b> The validation split scores
+          {{ ev.VALID_MASK_MAP50|floatformat:3 }} /
+          {{ ev.VALID_MASK_MAP50_95|floatformat:3 }}, and is not reportable:
+          <code>best.pt</code> was selected by watching it, so it stopped being
+          held out the moment it chose a checkpoint. The gap between the two
+          splits is a useful generalisation check and nothing more. It is
+          <em>not</em> leak evidence &mdash; leakage inflates test scores, so it
+          would close the gap rather than open one. Split integrity is
+          established instead by the assertions in
+          <code>tools/prepare_dataset.py</code>, which refuse to report success
+          unless all three leak conditions hold.
+        </p>
+        <p>
+          <b>Precision {{ ev.MASK_PRECISION|floatformat:3 }}, recall
+          {{ ev.MASK_RECALL|floatformat:3 }}.</b> Recall below precision means
+          the system misses damage more often than it invents it. For an
+          estimate that is the safer direction to err, but it is still a miss:
+          an assessment produced here is a first pass, not a final settlement.
+        </p>
+      </div>
+    </details>
+  </div>
+</section>
+
+{% comment %}
+New: training versus validation versus test. YOLO segmentation has no single
+"accuracy" figure, so the honest equivalents are precision, recall, F1 and mAP
+on each split, side by side. The training row is deliberately labelled as the
+data the model was fitted on: it is there to show the generalisation gap, not to
+be quoted as performance.
+{% endcomment %}
+<section class="card" style="margin-bottom:var(--gap)">
+  <div class="card-head">
+    <h2>Training, validation and test performance</h2>
+    <span class="hint">Mask metrics &middot; {{ ev.MODEL_NAME }} &middot; best.pt re-evaluated locally</span>
+  </div>
+  <div class="card-body">
+    <p class="lede">
+      Segmentation models do not have one &ldquo;accuracy&rdquo; number, so the
+      same four measures are shown for each split: <b>precision</b> (of the
+      damage the model drew, how much was real), <b>recall</b> (of the real
+      damage, how much the model found), <b>F1</b> (the balance of the two) and
+      <b>mAP</b> as above.
+    </p>
+
+    <div class="table-scroll">
+      <table class="data">
+        <caption>
+          Mask metrics for the same {{ ev.MODEL_NAME }} weights on all three
+          splits. Only the test row is a reportable accuracy.
+        </caption>
+        <thead>
+          <tr>
+            <th scope="col">Split</th>
+            <th scope="col">Role</th>
+            <th scope="col" class="num">Images</th>
+            <th scope="col" class="num">Instances</th>
+            <th scope="col" class="num">Precision</th>
+            <th scope="col" class="num">Recall</th>
+            <th scope="col" class="num">F1</th>
+            <th scope="col" class="num">mAP50</th>
+            <th scope="col" class="num">mAP50-95</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for s in ev.SPLITS %}
+          <tr>
+            <td>{% if s.key == 'test' %}<b>{{ s.label }}</b>{% else %}{{ s.label }}{% endif %}</td>
+            <td>{{ s.role }}</td>
+            <td class="num">{{ s.images }}</td>
+            <td class="num">{{ s.instances }}</td>
+            <td class="num">{{ s.precision|floatformat:3 }}</td>
+            <td class="num">{{ s.recall|floatformat:3 }}</td>
+            <td class="num">{{ s.f1|floatformat:3 }}</td>
+            <td class="num">{{ s.map50|floatformat:3 }}</td>
+            <td class="num">{{ s.map50_95|floatformat:3 }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+
+    <div class="callout" style="margin-top:18px">
+      <p>
+        <b>The generalisation gap.</b> Mask mAP50 falls from
+        {{ ev.SPLITS.0.map50|floatformat:3 }} on the images the model was fitted
+        on to {{ ev.SPLITS.2.map50|floatformat:3 }} on images it has never seen
+        &mdash; {{ ev.TRAIN_TEST_GAP_POINTS|floatformat:0 }} points. The model
+        fits what it has seen far better than what it has not, which is the
+        usual signature of overfitting on a dataset of this size. More data,
+        early stopping and stronger augmentation are the ways to narrow it.
+      </p>
+      <p>
+        The training figures are not an accuracy claim. That split also holds
+        the augmented copies of each photograph, and the model was fitted on
+        every one of them, so they flatter it. They are shown to make the gap
+        visible; the test row is the number to quote.
+      </p>
+    </div>
+
+    <p class="footnote">
+      These three rows come from re-evaluating <code>best.pt</code> locally
+      (Ultralytics 8.4.126, {{ ev.CPU_HARDWARE }}), because the Colab results
+      folder was not kept; per-epoch loss curves are therefore not shown. The
+      local test and validation mAP agree with the Colab figures above to within
+      0.003, the size of a CPU-versus-GPU numerical difference. The test split
+      is the same {{ ev.TEST_IMAGES }} images and {{ ev.TEST_INSTANCES }}
+      instances as the headline.
+    </p>
+  </div>
+</section>
+
+<section class="card" style="margin-bottom:var(--gap)">
+  <div class="card-head">
+    <h2>Performance metrics, per damage class</h2>
+    <span class="hint">Mask &middot; precision, recall and F1 on the test split</span>
+  </div>
+  <div class="card-body">
+    <div class="table-scroll">
+      <table class="data">
+        <caption>
+          Same ordering as the table above, worst to best. The last column is
+          training mAP50 minus test mAP50: how much of each class's score does
+          not carry over to unseen images.
+        </caption>
+        <thead>
+          <tr>
+            <th scope="col">Damage class</th>
+            <th scope="col" class="num">Precision</th>
+            <th scope="col" class="num">Recall</th>
+            <th scope="col" class="num">F1</th>
+            <th scope="col" class="num">Train mAP50</th>
+            <th scope="col" class="num">Test mAP50</th>
+            <th scope="col" class="num">Gap</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for d in ev.CLASS_DETAIL %}
+          <tr>
+            <td><b>{{ d.label }}</b></td>
+            <td class="num">{{ d.precision|floatformat:3 }}</td>
+            <td class="num">{{ d.recall|floatformat:3 }}</td>
+            <td class="num">{{ d.f1|floatformat:3 }}</td>
+            <td class="num">{{ d.train_map50|floatformat:3 }}</td>
+            <td class="num">{% if d.name in ev.APPROXIMATE %}&#8776;{% endif %}{{ d.test_map50|floatformat:3 }}</td>
+            <td class="num">{{ d.gap|floatformat:3 }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    <p class="footnote">
+      Every figure in this table comes from the local re-evaluation, so the test
+      mAP50 here can differ from the Colab-recorded figure in the first table by
+      up to 0.003. Precision below recall for every class would mean the model
+      invents damage more often than it misses it; here recall is the lower of
+      the two for all seven classes, so the model misses more than it invents.
+    </p>
+  </div>
+</section>
+
+<section class="card" style="margin-bottom:var(--gap)">
+  <div class="card-head">
+    <h2>Confusion matrix</h2>
+    <span class="hint">Test split &middot; {{ ev.TEST_IMAGES }} images, {{ ev.TEST_INSTANCES }} instances</span>
+  </div>
+  <div class="card-body">
+    <p class="lede">
+      Where the model is right and where it mistakes one kind of damage for
+      another. Ultralytics draws the <b>true class along the horizontal axis</b>
+      and the <b>predicted class along the vertical axis</b>; the extra
+      <em>background</em> row and column hold damage the model missed and damage
+      it drew where there was none. In the normalised matrix each column is
+      scaled to the true instances of that class, so the diagonal reads as the
+      share of each class that was found and named correctly.
+    </p>
+    <div style="display:flex;flex-wrap:wrap;gap:18px">
+      <figure style="flex:1 1 320px;margin:0">
+        <img src="{% static 'img/eval/confusion_matrix_normalized.png' %}"
+             alt="Normalised confusion matrix for the seven damage classes on the test split"
+             style="width:100%;height:auto;display:block" />
+        <figcaption class="footnote">Normalised: each column sums to one.</figcaption>
+      </figure>
+      <figure style="flex:1 1 320px;margin:0">
+        <img src="{% static 'img/eval/confusion_matrix.png' %}"
+             alt="Confusion matrix of instance counts for the seven damage classes on the test split"
+             style="width:100%;height:auto;display:block" />
+        <figcaption class="footnote">Raw instance counts.</figcaption>
+      </figure>
+    </div>
+
+    <details class="disclosure">
+      <summary>Precision-recall and F1 curves</summary>
+      <div class="disclosure-body">
+        <p>
+          The precision-recall curve shows how precision falls as the
+          confidence threshold is lowered to find more damage; the area under
+          each class's curve is its mAP50. The F1 curve shows which confidence
+          threshold balances the two best.
+        </p>
+        <div style="display:flex;flex-wrap:wrap;gap:18px">
+          <figure style="flex:1 1 320px;margin:0">
+            <img src="{% static 'img/eval/MaskPR_curve.png' %}"
+                 alt="Mask precision-recall curve per damage class on the test split"
+                 style="width:100%;height:auto;display:block" />
+          </figure>
+          <figure style="flex:1 1 320px;margin:0">
+            <img src="{% static 'img/eval/MaskF1_curve.png' %}"
+                 alt="Mask F1 against confidence threshold per damage class on the test split"
+                 style="width:100%;height:auto;display:block" />
+          </figure>
+        </div>
+      </div>
+    </details>
+  </div>
+</section>
+
+<div class="duo">
+  <section class="card">
+    <div class="card-head">
+      <h2>Accuracy does not track training volume</h2>
+      <span class="hint">Spearman &rho; = {{ ev.VOLUME_CORRELATION|floatformat:2 }}</span>
+    </div>
+    <div class="card-body">
+      <p class="lede">
+        The correlation between how much training data a class has and how
+        accurately it is detected is <b>negative</b>. The three most accurate
+        classes are the three rarest in the training set, and the class with the
+        most data of any is third worst.
+      </p>
+      <ul class="notes">
+        <li>
+          <b>Tyre flat</b> &mdash; {{ ev.CLASS_RESULTS.6.train_instances }}
+          training instances, the fewest, and the most accurate class at
+          &#8776;{{ ev.CLASS_RESULTS.6.map50|floatformat:2 }}.
+        </li>
+        <li>
+          <b>Scratch</b> &mdash; {{ ev.CLASS_RESULTS.2.train_instances }}
+          training instances, the most of any class, and third worst at
+          {{ ev.CLASS_RESULTS.2.map50|floatformat:3 }}.
+        </li>
+      </ul>
+      <p class="footnote">
+        What predicts accuracy here is not data volume but whether the damage
+        has an edge an annotator can agree on. A flat tyre and a shattered
+        window have boundaries; a crack and a scratch are arguments. So a weak
+        class on this system is never explained by "not enough data" &mdash;
+        the measured correlation contradicts that explanation directly.
+      </p>
+    </div>
+  </section>
+
+  <section class="card">
+    <div class="card-head">
+      <h2>What this system does not do</h2>
+      <span class="hint">Stated before it is asked</span>
+    </div>
+    <div class="card-body">
+      <ul class="notes">
+        <li>
+          <b>Cars only.</b> The training data is CarDD, which contains no
+          two-wheelers. Nothing here has been measured on a motorcycle or a
+          scooter and none should be submitted to it.
+        </li>
+        <li>
+          <b>External damage only.</b> Detection works from photographs of the
+          outside of the vehicle. Mechanical, structural and internal damage are
+          outside the scope entirely.
+        </li>
+        <li>
+          <b>No re-identification across views.</b> When several photographs
+          show damage, the combined estimate takes the <em>maximum</em> per part
+          rather than the sum &mdash; a bumper photographed twice is still one
+          bumper to buy. The system cannot tell one bumper's dent from another's,
+          so max is the conservative reading: it can understate genuinely
+          separate damage, but it cannot invent damage that is not there.
+        </li>
+        <li>
+          <b>Not a quotation.</b> Prices are ranges from a published repair
+          price list ({{ cost_source }}), not from a garage, a parts supplier or
+          an insurer. Labour rates, paint and regional variation are not
+          modelled separately.
+        </li>
+      </ul>
+    </div>
+  </section>
+</div>
+
+{% comment %}
+New: how this project differs from existing cost-estimation systems. Methods
+only. The descriptions are paraphrased from each system's own abstract and are
+recorded in core/evaluation.py with their links. No accuracy figure from any of
+them is quoted: their datasets and cost sources are not public, so a number
+would not be measured on the same task and the comparison would be invented.
+{% endcomment %}
+<section class="card" style="margin-bottom:var(--gap)">
+  <div class="card-head">
+    <h2>How this differs from existing cost-estimation systems</h2>
+    <span class="hint">Method comparison, from each system's own description</span>
+  </div>
+  <div class="card-body">
+    <p class="lede">
+      Existing systems mostly <em>learn</em> severity and price from large sets
+      of past claims. This project does the opposite on purpose: the model only
+      outlines the damage, and arithmetic against documented tables does the
+      rest, so every figure can be traced to a rule rather than trusted.
+    </p>
+
+    <div class="table-scroll">
+      <table class="data">
+        <caption>
+          Compared on method only. No accuracy figures are compared: those
+          systems' data and cost sources are not public, so a number would not
+          be measured on the same task.
+        </caption>
+        <thead>
+          <tr>
+            <th scope="col">System</th>
+            <th scope="col">Finds the damage</th>
+            <th scope="col">Decides severity</th>
+            <th scope="col">Decides cost</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for s in ev.EXISTING_SYSTEMS %}
+          <tr>
+            <td><a href="{{ s.url }}" rel="noopener noreferrer">{{ s.name }}</a> <span class="hint">{{ s.year }}</span></td>
+            <td>{{ s.detection }}</td>
+            <td>{{ s.severity }}</td>
+            <td>{{ s.cost }}</td>
+          </tr>
+          {% endfor %}
+          <tr>
+            <td><b>This project</b></td>
+            <td>{{ ev.MODEL_NAME }} draws a polygon around each damaged region.</td>
+            <td><b>Measured</b> from polygon area against documented per-class thresholds.</td>
+            <td><b>Itemised</b> from a published repair price list, with every line and the total shown as a range.</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h3 style="margin-top:22px">What this project changes</h3>
+    <ul class="notes">
+      <li>
+        <b>Severity is measured, not predicted.</b> The training data carries no
+        severity labels, so a severity classifier would have had nothing honest
+        to learn from. The verdict shown on every result is the measurement
+        beside the threshold that banded it.
+      </li>
+      <li>
+        <b>Cost is itemised, not regressed.</b> Each damage maps to a repair
+        action and a price range from a published list, so a reader can see
+        which line drives the total instead of receiving one number.
+      </li>
+      <li>
+        <b>Repair, not replacement.</b> The estimate prices repairing the damage.
+        Only lamps and glass, which cannot be repaired, are priced as
+        replacements, and the report labels them as such.
+      </li>
+      <li>
+        <b>A part is bought once.</b> Several photographs of the same panel are
+        merged before pricing, taking the maximum rather than the sum, so taking
+        more photographs cannot inflate the bill.
+      </li>
+      <li>
+        <b>The component is supplied, not guessed.</b> No class in the dataset
+        names a panel, so the owner says which panel each angle shows, and every
+        default is editable.
+      </li>
+      <li>
+        <b>The split is leak-free.</b> In the dataset export's own split,
+        {{ ev.SPLIT_LEAK_BEFORE_COUNT }} of {{ ev.SPLIT_LEAK_BEFORE_TOTAL }} test
+        images ({{ ev.SPLIT_LEAK_BEFORE_PERCENT|floatformat:1 }}%) were
+        augmented copies of training photographs. Re-splitting by photograph
+        brought that to {{ ev.SPLIT_LEAK_AFTER_COUNT }}, so the accuracy above is
+        measured on images the model has genuinely not seen.
+      </li>
+      <li>
+        <b>Limits are stated per class.</b> The page says which classes have an
+        unreliable outline and how much of the data they are, instead of
+        reporting one flattering average.
+      </li>
+    </ul>
+
+    <p class="footnote">
+      <b>Where the others may be stronger.</b> Systems trained on real claims
+      can learn real repair prices, whereas this project uses a published
+      price list of approximate ranges, not workshop quotations or an insurer's
+      schedule. The trade is accuracy of price for traceability of every figure.
+    </p>
+  </div>
+</section>
+
+<div class="duo">
+  <section class="card">
+    <div class="card-head">
+      <h2>How an assessment is produced</h2>
+      <span class="hint">Four stages</span>
+    </div>
+    <div class="card-body">
+      <ol class="method">
+        <li>
+          <div>
+            <b style="display:block">Photograph the damage</b>
+            One slot per camera angle, plus a close-up. More angles give the
+            estimate more to work from, and each frame is measured on its own.
+          </div>
+        </li>
+        <li>
+          <div>
+            <b style="display:block">Segment each damaged region</b>
+            {{ ev.MODEL_NAME }} returns a polygon per detected region and a class,
+            at about {{ ev.INFERENCE_MS|floatformat:1 }} ms per image.
+          </div>
+        </li>
+        <li>
+          <div>
+            <b style="display:block">Grade severity from measured area</b>
+            The polygon's area as a fraction of its own frame, compared against
+            documented per-class thresholds. The model does not predict severity;
+            arithmetic assigns it, which is why the results page shows the
+            measurement against the thresholds that banded it.
+          </div>
+        </li>
+        <li>
+          <div>
+            <b style="display:block">Price it, itemised</b>
+            Each graded region maps to a repair action and a price range, summed
+            with {{ gst_percent|floatformat:0 }}% GST into one docket that is
+            stored with the figures it produced.
+          </div>
+        </li>
+      </ol>
+    </div>
+  </section>
+
+  <section class="card">
+    <div class="card-head">
+      <h2>Provenance</h2>
+      <span class="hint">One recorded run</span>
+    </div>
+    <div class="card-body">
+      <dl class="slab">
+        <dt>Model</dt>
+        <dd>
+          {{ ev.MODEL_NAME }}
+          &mdash; {{ ev.MODEL_PARAMS_MILLIONS|floatformat:2 }} M parameters,
+          {{ ev.MODEL_GFLOPS|floatformat:1 }} GFLOPs
+        </dd>
+        <dt>Training</dt>
+        <dd>
+          {{ ev.TRAIN_EPOCHS }} epochs in
+          {{ ev.TRAIN_HOURS|floatformat:3 }} h
+          (about {{ ev.TRAIN_MINUTES|floatformat:0 }} minutes)
+          on a {{ ev.TRAIN_HARDWARE }}
+        </dd>
+        <dt>Training data</dt>
+        <dd>{{ ev.TRAIN_IMAGES }} images, {{ ev.TRAIN_INSTANCES }} instances</dd>
+        <dt>Validation data</dt>
+        <dd>{{ ev.VALID_IMAGES }} images, {{ ev.VALID_INSTANCES }} instances</dd>
+        <dt>Evaluated</dt>
+        <dd>{{ ev.EVALUATED_ON }}, on the held-out test split</dd>
+        <dt>Test split</dt>
+        <dd>{{ ev.TEST_IMAGES }} images, {{ ev.TEST_INSTANCES }} instances</dd>
+        <dt>Inference (GPU)</dt>
+        <dd>{{ ev.INFERENCE_MS|floatformat:1 }} ms per image</dd>
+        <dt>Inference (laptop)</dt>
+        <dd>about {{ ev.CPU_INFERENCE_MS|floatformat:0 }} ms per image on an {{ ev.CPU_HARDWARE }}</dd>
+        <dt>Rate card</dt>
+        <dd>{{ cost_source }}</dd>
+      </dl>
+      <p class="footnote">
+        The accuracy headline describes one training run and one evaluation,
+        recorded in <code>docs/RESULTS.md</code> and read from
+        <code>core/evaluation.py</code> so that this page, the report and any
+        future chart cannot disagree about them.
+      </p>
+    </div>
+  </section>
+</div>
+{% endblock %}

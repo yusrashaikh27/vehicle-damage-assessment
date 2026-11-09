@@ -185,13 +185,19 @@ DATA_UPLOAD_MAX_MEMORY_SIZE = 15 * 1024 * 1024
 # ---------------------------------------------------------------------------
 # Django REST Framework
 # ---------------------------------------------------------------------------
-# The report's Backend API Layer. Read access is open so the API can be
-# demonstrated from a browser; creating an inspection requires a login, because
-# it runs the model and writes files.
+# The report's Backend API Layer. Every endpoint requires a login, read
+# included.
+#
+# It was IsAuthenticatedOrReadOnly, which sounds harmless and is not: an
+# inspection serialises the owner's name, phone number, email address and the
+# vehicle's registration, so "read is open" published personal data of every
+# person in the database to anyone who could reach the port. Demonstrating the
+# API from a browser still works - log in at /admin/ first and the session
+# cookie carries into the browsable API.
 
 REST_FRAMEWORK = {
     "DEFAULT_PERMISSION_CLASSES": [
-        "rest_framework.permissions.IsAuthenticatedOrReadOnly",
+        "rest_framework.permissions.IsAuthenticated",
     ],
     "DEFAULT_AUTHENTICATION_CLASSES": [
         "rest_framework.authentication.SessionAuthentication",

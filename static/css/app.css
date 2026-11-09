@@ -2,46 +2,94 @@
    Vehicle Damage Assessment and Cost Estimator - stylesheet
    ==========================================================================
 
-   The look is a workshop job card: a printed docket a service advisor fills in
-   and hands over with the vehicle. That is the same artefact this system
-   produces, so the interface borrows its vocabulary - squared corners, hairline
-   rules, monospace for every measured figure, hazard yellow reserved for
-   warnings only.
+   The interface is a working dashboard: white cards on a cool ground, soft
+   elevation, one accent colour for anything interactive, and a lot of air.
+   The job it has to do is present a priced assessment that somebody is going
+   to act on, so it should read as a tool that is confident about its numbers.
 
-   Two rules held throughout:
+   Three rules held throughout.
 
-   1. Monospace for data, sans for prose. Money, areas, confidences and docket
-      numbers are set in a mono face so digits line up in a column and can be
-      compared down the page. Explanations are set in the system sans, because
-      mono is slow to read in sentences.
+   1. THE MEASURED FIGURES ARE MONOSPACED, THE PROSE IS NOT. Money, areas,
+      confidences, registrations and docket numbers are set in a mono face with
+      tabular figures, so digits line up in a column and can be compared down
+      the page. That is a real typographic reason and it survives from the
+      previous design. What does not survive is mono on buttons, navigation and
+      headings, where it was costume rather than function - those are now set
+      in the sans, which is faster to read and looks less like a terminal.
 
-   2. Colour carries meaning or it is not used. Green / amber / red mean minor /
-      moderate / severe and nothing else. Hazard yellow means "this figure is
-      not from a trained model". There is no decorative colour anywhere.
+   2. COLOUR CARRIES MEANING OR IT IS NOT USED. Green / amber / red mean minor
+      / moderate / severe and nothing else. Hazard yellow means "this figure is
+      not from a trained model". Indigo means "you can interact with this". No
+      other colour appears.
 
-   No webfonts and no CDN: the lab machine may be offline during the demo, and a
-   font request that times out would leave the page rendering in Times New Roman
-   for thirty seconds. System font stacks always resolve.
+   3. THE SEVERITY COLOURS ARE FROZEN. #2E7D5B, #B26B00 and #B3261E are
+      duplicated in core/report.py as reportlab HexColors, so the screen and
+      the generated PDF agree about what "moderate" looks like. Changing them
+      here without changing them there silently breaks that agreement, and the
+      PDF is what objective 4 is graded on. Same for the hazard yellow.
+
+   Fonts are self-hosted from static/fonts/ - no CDN and no Google Fonts
+   request. The lab machine may be offline during the demo, and a webfont
+   request that times out leaves the page in Times New Roman for thirty
+   seconds. Every stack still ends in a system fallback, so a missing file
+   degrades to the previous look instead of breaking it.
    ========================================================================== */
+
+/* --------------------------------------------------------------------------
+   Self-hosted faces
+   --------------------------------------------------------------------------
+   font-display:swap so text paints immediately in the fallback and reflows
+   when the file arrives, rather than holding the page blank. */
+
+@font-face {
+  font-family: "Inter";
+  src: url("../fonts/inter-variable.woff2") format("woff2-variations"),
+       url("../fonts/inter-variable.woff2") format("woff2");
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "JetBrains Mono";
+  src: url("../fonts/jetbrains-mono-variable.woff2") format("woff2-variations"),
+       url("../fonts/jetbrains-mono-variable.woff2") format("woff2");
+  font-weight: 100 800;
+  font-style: normal;
+  font-display: swap;
+}
 
 :root {
   color-scheme: light;
 
-  /* Cool primer grey, the shade of a panel in body filler - not the warm cream
-     that every template defaults to. */
-  --paper: #edeef0;
+  /* Surfaces. A cool, slightly blue ground so white cards lift off it. */
+  --paper: #f4f6f9;
   --card: #ffffff;
-  --ink: #15181b;
-  --ink-soft: #3a4149;
-  --muted: #6a727b;
-  --rule: #c9cdd3;
-  --rule-soft: #dee1e5;
+  --sunken: #f8fafc;
 
-  /* Hazard yellow. Warnings and the brand mark only. */
+  /* Text. Slate rather than pure black - softer on a projector. */
+  --ink: #0f1729;
+  --ink-soft: #334155;
+  --muted: #64748b;
+  --faint: #94a3b8;
+
+  /* Lines. Barely there; elevation does most of the separating. */
+  --rule: #e2e8f0;
+  --rule-soft: #eef2f7;
+
+  /* Indigo. Interactive affordances only: links, focus, primary buttons,
+     the current nav item, chart series. */
+  --accent: #4f46e5;
+  --accent-deep: #4338ca;
+  --accent-soft: #eef2ff;
+  --accent-line: #c7d2fe;
+
+  /* Hazard yellow. Warnings and the brand mark only. Shared with the PDF. */
   --signal: #ffc300;
   --signal-deep: #b98d00;
+  --signal-wash: #fffbeb;
 
-  /* Severity. Also used by the PDF, so screen and print agree. */
+  /* Severity. FROZEN - duplicated in core/report.py. See rule 3 above. */
   --minor: #2e7d5b;
   --moderate: #b26b00;
   --severe: #b3261e;
@@ -49,13 +97,28 @@
   --moderate-wash: #fbf0dd;
   --severe-wash: #fbe9e7;
 
-  --sans: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial,
-    sans-serif;
-  --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas,
-    "Liberation Mono", monospace;
+  --sans: "Inter", system-ui, -apple-system, "Segoe UI", Roboto,
+    "Helvetica Neue", Arial, sans-serif;
+  --mono: "JetBrains Mono", ui-monospace, SFMono-Regular, "SF Mono", Menlo,
+    Consolas, "Liberation Mono", monospace;
 
-  --wrap: 1120px;
-  --gap: 24px;
+  /* Elevation. Two-layer shadows: a tight contact shadow plus a wide soft
+     one. A single large blur reads as fog rather than as height. */
+  --shadow-sm: 0 1px 2px rgba(15, 23, 41, 0.04),
+               0 1px 3px rgba(15, 23, 41, 0.06);
+  --shadow-md: 0 1px 2px rgba(15, 23, 41, 0.04),
+               0 6px 16px -4px rgba(15, 23, 41, 0.08);
+  --shadow-lg: 0 2px 4px rgba(15, 23, 41, 0.04),
+               0 16px 32px -8px rgba(15, 23, 41, 0.12);
+
+  --r-xs: 6px;
+  --r-sm: 8px;
+  --r: 12px;
+  --r-lg: 16px;
+  --r-pill: 999px;
+
+  --wrap: 1180px;
+  --gap: 22px;
 }
 
 *,
@@ -74,28 +137,37 @@ body {
   color: var(--ink);
   font-family: var(--sans);
   font-size: 15px;
-  line-height: 1.55;
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+h1, h2, h3, h4 {
+  letter-spacing: -0.018em;
+  font-weight: 650;
 }
 
 a {
-  color: var(--ink);
-  text-decoration-color: var(--rule);
+  color: var(--accent);
+  text-decoration-color: var(--accent-line);
   text-underline-offset: 2px;
 }
 
 a:hover {
-  text-decoration-color: var(--ink);
+  text-decoration-color: currentColor;
 }
 
 :focus-visible {
-  outline: 2px solid var(--ink);
+  outline: 2px solid var(--accent);
   outline-offset: 2px;
+  border-radius: var(--r-xs);
 }
 
 @media (prefers-reduced-motion: reduce) {
   * {
     transition: none !important;
     animation: none !important;
+    scroll-behavior: auto !important;
   }
 }
 
@@ -103,7 +175,7 @@ a:hover {
   width: 100%;
   max-width: var(--wrap);
   margin: 0 auto;
-  padding: 0 20px;
+  padding: 0 22px;
 }
 
 .skip {
@@ -115,19 +187,27 @@ a:hover {
   left: 12px;
   top: 12px;
   z-index: 20;
-  background: var(--signal);
-  color: var(--ink);
-  padding: 8px 14px;
-  font-family: var(--mono);
+  background: var(--accent);
+  color: #fff;
+  padding: 9px 15px;
+  border-radius: var(--r-sm);
+  box-shadow: var(--shadow-lg);
 }
 
 /* --------------------------------------------------------------------------
    Masthead
-   -------------------------------------------------------------------------- */
+   --------------------------------------------------------------------------
+   A light bar, not the black slab it used to be. It sits under the page
+   rather than over it: the content is the subject, the chrome is not. */
 
 .masthead {
-  background: var(--ink);
-  border-bottom: 3px solid var(--signal);
+  background: rgba(255, 255, 255, 0.86);
+  backdrop-filter: saturate(180%) blur(10px);
+  -webkit-backdrop-filter: saturate(180%) blur(10px);
+  border-bottom: 1px solid var(--rule);
+  position: sticky;
+  top: 0;
+  z-index: 10;
 }
 
 .masthead-inner {
@@ -135,33 +215,43 @@ a:hover {
   align-items: center;
   justify-content: space-between;
   gap: 20px;
-  min-height: 62px;
+  min-height: 64px;
   flex-wrap: wrap;
 }
 
 .brand {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 11px;
   text-decoration: none;
   padding: 10px 0;
+  color: var(--ink);
 }
 
+/* The mark keeps the hazard yellow, which is the one piece of the old
+   identity worth carrying: it is the project's colour and it is already on
+   the cover of the PDF. */
 .brand-mark {
   font-family: var(--mono);
   font-weight: 700;
-  font-size: 15px;
-  letter-spacing: 0.06em;
-  background: var(--signal);
-  color: var(--ink);
-  padding: 5px 8px;
+  font-size: 13px;
+  letter-spacing: 0.04em;
+  background: var(--ink);
+  color: var(--signal);
+  width: 34px;
+  height: 34px;
+  border-radius: var(--r-sm);
+  display: grid;
+  place-items: center;
+  flex: none;
+  box-shadow: var(--shadow-sm);
 }
 
 .brand-text {
-  color: #fff;
-  font-size: 14px;
+  font-size: 14.5px;
   line-height: 1.25;
-  font-weight: 600;
+  font-weight: 650;
+  letter-spacing: -0.01em;
 }
 
 .brand-text em {
@@ -169,60 +259,61 @@ a:hover {
   font-style: normal;
   font-weight: 400;
   font-size: 11.5px;
-  letter-spacing: 0.02em;
-  color: #9aa3ad;
+  letter-spacing: 0;
+  color: var(--muted);
+  margin-top: 1px;
 }
 
 .masthead nav {
   display: flex;
-  gap: 4px;
+  gap: 3px;
   flex-wrap: wrap;
+  align-items: center;
 }
 
 .masthead nav a {
-  font-family: var(--mono);
-  font-size: 11.5px;
-  text-transform: uppercase;
-  letter-spacing: 0.09em;
-  color: #c4cad1;
+  font-size: 13.5px;
+  font-weight: 550;
+  color: var(--ink-soft);
   text-decoration: none;
-  padding: 8px 11px;
-  border: 1px solid transparent;
+  padding: 8px 13px;
+  border-radius: var(--r-pill);
+  transition: background 0.13s, color 0.13s;
 }
 
 .masthead nav a:hover {
-  color: #fff;
-  border-color: #3a4149;
+  background: var(--sunken);
+  color: var(--ink);
 }
 
 .masthead nav a[aria-current="page"] {
-  color: var(--ink);
-  background: var(--signal);
-  border-color: var(--signal);
+  color: var(--accent-deep);
+  background: var(--accent-soft);
 }
 
 /* --------------------------------------------------------------------------
    Site-wide notices
    -------------------------------------------------------------------------- */
 
-/* Actual hazard tape. The one place in the interface allowed to shout, because
-   it is saying the numbers below it were invented by a placeholder. */
+/* The one place in the interface allowed to shout, because it is saying the
+   numbers below it were invented by a placeholder detector. Kept loud on
+   purpose - see CLAUDE.md. */
 .notice-stub {
-  background: #fff8e1;
-  border-bottom: 1px solid var(--rule);
+  background: var(--signal-wash);
+  border-bottom: 1px solid #fde68a;
   background-image: repeating-linear-gradient(
     -45deg,
     var(--signal) 0 14px,
     var(--ink) 14px 28px
   );
-  background-size: 100% 6px;
+  background-size: 100% 5px;
   background-repeat: no-repeat;
   background-position: top left;
-  padding-top: 6px;
+  padding-top: 5px;
 }
 
 .notice-stub-body {
-  padding: 12px 0 14px;
+  padding: 14px 0 16px;
   display: flex;
   gap: 14px;
   align-items: baseline;
@@ -231,19 +322,21 @@ a:hover {
 
 .notice-stub strong {
   font-family: var(--mono);
-  font-size: 11.5px;
+  font-size: 11px;
+  font-weight: 700;
   text-transform: uppercase;
-  letter-spacing: 0.09em;
+  letter-spacing: 0.08em;
   background: var(--ink);
   color: var(--signal);
-  padding: 3px 7px;
+  padding: 4px 9px;
+  border-radius: var(--r-pill);
   white-space: nowrap;
 }
 
 .notice-stub p {
   margin: 0;
   font-size: 13.5px;
-  color: var(--ink-soft);
+  color: #78350f;
   max-width: 78ch;
 }
 
@@ -251,23 +344,26 @@ a:hover {
   font-family: var(--mono);
   font-size: 12.5px;
   background: #fff;
-  border: 1px solid var(--rule);
-  padding: 1px 5px;
+  border: 1px solid #fde68a;
+  border-radius: var(--r-xs);
+  padding: 1px 6px;
 }
 
 .messages {
-  margin: 20px 0 0;
+  margin: 22px 0 0;
   padding: 0;
   list-style: none;
   display: grid;
-  gap: 8px;
+  gap: 9px;
 }
 
 .messages li {
   border: 1px solid var(--rule);
-  border-left: 4px solid var(--muted);
+  border-left: 3px solid var(--muted);
   background: var(--card);
-  padding: 11px 14px;
+  border-radius: var(--r-sm);
+  box-shadow: var(--shadow-sm);
+  padding: 12px 15px;
   font-size: 14px;
 }
 
@@ -291,7 +387,7 @@ a:hover {
    -------------------------------------------------------------------------- */
 
 main {
-  padding: 28px 20px 56px;
+  padding: 30px 22px 64px;
 }
 
 .page-head {
@@ -300,39 +396,38 @@ main {
   justify-content: space-between;
   gap: 20px;
   flex-wrap: wrap;
-  margin-bottom: 22px;
-  padding-bottom: 14px;
-  border-bottom: 1px solid var(--rule);
+  margin-bottom: 24px;
 }
 
 .page-head h1 {
   margin: 0;
-  font-size: 24px;
-  line-height: 1.2;
-  letter-spacing: -0.01em;
+  font-size: 27px;
+  line-height: 1.18;
+  font-weight: 680;
 }
 
 .page-head p {
-  margin: 6px 0 0;
+  margin: 7px 0 0;
   color: var(--muted);
-  font-size: 14px;
+  font-size: 14.5px;
   max-width: 72ch;
 }
 
 .eyebrow {
-  display: block;
-  font-family: var(--mono);
-  font-size: 11px;
+  display: inline-block;
+  font-size: 11.5px;
+  font-weight: 650;
   text-transform: uppercase;
-  letter-spacing: 0.13em;
-  color: var(--muted);
-  margin-bottom: 7px;
+  letter-spacing: 0.09em;
+  color: var(--accent);
+  margin-bottom: 8px;
 }
 
 .card {
   background: var(--card);
   border: 1px solid var(--rule);
-  border-radius: 2px;
+  border-radius: var(--r);
+  box-shadow: var(--shadow-sm);
 }
 
 .card-head {
@@ -341,19 +436,16 @@ main {
   justify-content: space-between;
   gap: 14px;
   flex-wrap: wrap;
-  padding: 13px 18px;
-  border-bottom: 1px solid var(--rule);
-  background: #f7f8f9;
+  padding: 15px 20px;
+  border-bottom: 1px solid var(--rule-soft);
 }
 
 .card-head h2,
 .card-head h3 {
   margin: 0;
-  font-family: var(--mono);
-  font-size: 12px;
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.1em;
+  font-size: 15px;
+  font-weight: 650;
+  letter-spacing: -0.01em;
 }
 
 .card-head .hint {
@@ -362,7 +454,7 @@ main {
 }
 
 .card-body {
-  padding: 18px;
+  padding: 20px;
 }
 
 .card-body > :first-child {
@@ -375,14 +467,15 @@ main {
 
 footer.site {
   border-top: 1px solid var(--rule);
-  background: #e4e6e9;
-  padding: 20px 0 30px;
+  background: var(--card);
+  padding: 26px 0 34px;
   font-size: 12.5px;
   color: var(--muted);
 }
 
 footer.site p {
-  margin: 0 0 4px;
+  margin: 0 0 5px;
+  max-width: 92ch;
 }
 
 footer.site code {
@@ -397,13 +490,13 @@ footer.site code {
 .form-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 16px 18px;
+  gap: 17px 18px;
 }
 
 .field {
   display: flex;
   flex-direction: column;
-  gap: 5px;
+  gap: 6px;
   min-width: 0;
 }
 
@@ -412,11 +505,10 @@ footer.site code {
 }
 
 .field > label {
-  font-family: var(--mono);
-  font-size: 11px;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
+  font-size: 12.5px;
+  font-weight: 600;
   color: var(--ink-soft);
+  letter-spacing: 0;
 }
 
 .field .req {
@@ -426,32 +518,44 @@ footer.site code {
 input[type="text"],
 input[type="number"],
 input[type="search"],
+input[type="email"],
+input[type="tel"],
 input[type="file"],
 select,
 textarea {
-  font-family: var(--mono);
-  font-size: 14px;
+  font-family: var(--sans);
+  font-size: 14.5px;
   color: var(--ink);
-  background: #fcfcfd;
+  background: var(--card);
   border: 1px solid var(--rule);
-  border-radius: 2px;
-  padding: 9px 10px;
+  border-radius: var(--r-sm);
+  padding: 10px 12px;
   width: 100%;
   min-width: 0;
+  transition: border-color 0.13s, box-shadow 0.13s;
+}
+
+/* Identifiers and figures stay monospaced even as inputs, so a registration
+   or a year reads the way it will read on the finished docket. */
+input[name="registration_number"],
+input[name="vehicle_year"],
+input[type="number"] {
+  font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
 }
 
 select {
   /* Native chevron is removed by appearance:none on some platforms and then
      never comes back, so the platform control is left alone. */
-  background: #fcfcfd;
+  background: var(--card);
 }
 
 input:focus,
 select:focus,
 textarea:focus {
-  border-color: var(--ink);
-  outline: 2px solid var(--signal);
-  outline-offset: 0;
+  border-color: var(--accent);
+  outline: none;
+  box-shadow: 0 0 0 3px var(--accent-soft);
 }
 
 .helptext {
@@ -461,17 +565,18 @@ textarea:focus {
 }
 
 .errorlist {
-  margin: 3px 0 0;
+  margin: 4px 0 0;
   padding: 0 0 0 16px;
   color: var(--severe);
   font-size: 12.5px;
 }
 
 .form-error-summary {
-  border: 1px solid var(--severe);
-  border-left-width: 4px;
+  border: 1px solid #fecaca;
+  border-left: 3px solid var(--severe);
   background: var(--severe-wash);
-  padding: 12px 14px;
+  border-radius: var(--r-sm);
+  padding: 13px 15px;
   margin-bottom: 18px;
   font-size: 13.5px;
 }
@@ -480,63 +585,67 @@ textarea:focus {
   margin: 0;
 }
 
-/* Explanatory text beside a control or above a group of them. Quieter than body
-   copy, louder than a caption. Used wherever the page needs to say why it is
-   asking for something, which on this project is often. */
+/* Explanatory text beside a control or above a group of them. Quieter than
+   body copy, louder than a caption. */
 .note {
-  font-size: 13px;
-  line-height: 1.55;
+  font-size: 13.5px;
+  line-height: 1.6;
   color: var(--muted);
-  max-width: 62ch;
+  max-width: 64ch;
 }
 
 /* --------------------------------------------------------------------------
    The walk-around: one slot per camera angle.
 
-   Laid out as a grid of small plates rather than a long column of file inputs,
-   because the set of angles is the instruction. Seeing ten labelled positions at
-   once tells the user what a complete submission looks like without a paragraph
-   explaining it, and a slot that has a photograph in it reads as filled at a
-   glance, so what is still missing is obvious.
+   Laid out as a grid of small plates rather than a long column of file
+   inputs, because the set of angles is the instruction. Seeing ten labelled
+   positions at once tells the user what a complete submission looks like
+   without a paragraph explaining it.
 
-   Each plate is a dashed outline until it holds a file, then it goes solid with
-   an ink left edge - the same "provisional becomes recorded" idea the rest of the
-   job-card styling uses.
+   Each plate is a dashed outline until it holds a file, then it goes solid
+   and lifts - "provisional becomes recorded".
    -------------------------------------------------------------------------- */
 
 .shots {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(215px, 1fr));
   gap: 14px;
 }
 
 .shot {
-  border: 1px dashed var(--rule);
-  background: #fafbfc;
-  padding: 12px;
+  border: 1.5px dashed var(--rule);
+  background: var(--sunken);
+  border-radius: var(--r-sm);
+  padding: 13px;
   display: flex;
   flex-direction: column;
   gap: 9px;
   min-width: 0;
-  transition: border-color 0.12s, background 0.12s;
+  transition: border-color 0.13s, background 0.13s, box-shadow 0.13s;
+}
+
+.shot:hover {
+  border-color: var(--accent-line);
 }
 
 .shot.filled {
   border-style: solid;
   border-color: var(--rule);
-  border-left: 3px solid var(--ink);
   background: var(--card);
+  box-shadow: var(--shadow-sm);
 }
 
 /* The close-up. Flagged because it is the one shot that most improves the
-   estimate - area is measured against what is in frame - so a user with time for
-   only one photograph should be steered here. */
+   estimate - area is measured against what is in frame - so a user with time
+   for only one photograph should be steered here. */
 .shot.recommended {
-  border-color: var(--ink-soft);
+  border-color: var(--accent-line);
+  background: var(--accent-soft);
 }
 
 .shot.recommended.filled {
-  border-left-color: var(--signal);
+  background: var(--card);
+  border-color: var(--accent);
 }
 
 .shot-head {
@@ -547,42 +656,41 @@ textarea:focus {
 }
 
 .shot-head b {
-  font-family: var(--mono);
-  font-size: 11.5px;
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
+  font-size: 12.5px;
+  font-weight: 650;
   color: var(--ink);
   line-height: 1.3;
 }
 
 .shot-head .tag {
-  font-family: var(--mono);
-  font-size: 9.5px;
+  font-size: 10px;
+  font-weight: 650;
   text-transform: uppercase;
-  letter-spacing: 0.08em;
-  background: var(--signal);
-  color: var(--ink);
-  padding: 2px 5px;
+  letter-spacing: 0.06em;
+  background: var(--accent);
+  color: #fff;
+  padding: 2px 7px;
+  border-radius: var(--r-pill);
   white-space: nowrap;
 }
 
 .shot .hint {
   font-size: 12px;
-  line-height: 1.45;
+  line-height: 1.5;
   color: var(--muted);
   margin: 0;
 }
 
 .shot input[type="file"] {
-  background: #fff;
+  background: var(--card);
   font-size: 12px;
+  padding: 7px 9px;
   width: 100%;
 }
 
 .shot select {
   font-size: 12.5px;
-  padding: 6px 8px;
+  padding: 7px 9px;
 }
 
 .shot-panel {
@@ -592,11 +700,9 @@ textarea:focus {
 }
 
 .shot-panel span {
-  font-family: var(--mono);
-  font-size: 10px;
-  text-transform: uppercase;
-  letter-spacing: 0.07em;
-  color: var(--ink-soft);
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--muted);
 }
 
 .shot-thumb {
@@ -604,7 +710,7 @@ textarea:focus {
   gap: 9px;
   align-items: center;
   border-top: 1px solid var(--rule-soft);
-  padding-top: 9px;
+  padding-top: 10px;
 }
 
 .shot.filled .shot-thumb {
@@ -615,6 +721,7 @@ textarea:focus {
   width: 54px;
   height: 40px;
   object-fit: cover;
+  border-radius: var(--r-xs);
   border: 1px solid var(--rule);
   background: var(--paper);
   flex: none;
@@ -623,9 +730,9 @@ textarea:focus {
 .shot-thumb small {
   font-family: var(--mono);
   font-size: 10.5px;
-  color: var(--ink-soft);
+  color: var(--muted);
   word-break: break-all;
-  line-height: 1.3;
+  line-height: 1.35;
 }
 
 .shot .errorlist {
@@ -637,15 +744,16 @@ textarea:focus {
    would be worse than none. */
 .shot-tally {
   font-family: var(--mono);
-  font-size: 12px;
-  color: var(--ink-soft);
+  font-size: 12.5px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
 }
 
 .shot-tally b {
-  color: var(--ink);
+  color: var(--accent);
 }
 
-/* Cards stacked down the main column of the upload page. */
+/* Cards stacked down the main column. */
 .stack {
   display: grid;
   gap: var(--gap);
@@ -658,13 +766,11 @@ textarea:focus {
   align-items: center;
   gap: 14px;
   flex-wrap: wrap;
-  margin-top: 20px;
-  padding-top: 16px;
+  margin-top: 22px;
+  padding-top: 18px;
   border-top: 1px solid var(--rule-soft);
 }
 
-/* Beside the submit button the note sits on one line with it, so it is smaller
-   and not width-limited. */
 .form-actions .note {
   font-size: 12.5px;
   max-width: none;
@@ -677,49 +783,61 @@ textarea:focus {
 .btn {
   display: inline-flex;
   align-items: center;
+  justify-content: center;
   gap: 8px;
-  font-family: var(--mono);
-  font-size: 12px;
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.09em;
+  font-family: var(--sans);
+  font-size: 13.5px;
+  font-weight: 600;
+  letter-spacing: -0.005em;
   text-decoration: none;
   cursor: pointer;
-  padding: 11px 18px;
+  padding: 10px 18px;
   border: 1px solid var(--ink);
-  border-radius: 2px;
+  border-radius: var(--r-sm);
   background: var(--ink);
   color: #fff;
+  box-shadow: var(--shadow-sm);
+  transition: background 0.13s, border-color 0.13s, box-shadow 0.13s,
+    transform 0.06s;
 }
 
 .btn:hover {
-  background: #000;
+  background: #1e293b;
+  box-shadow: var(--shadow-md);
 }
 
+.btn:active {
+  transform: translateY(1px);
+  box-shadow: var(--shadow-sm);
+}
+
+/* The primary action. Indigo, because it is the thing to press. */
 .btn-signal {
-  background: var(--signal);
-  border-color: var(--signal-deep);
-  color: var(--ink);
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
 }
 
 .btn-signal:hover {
-  background: #ffd23d;
+  background: var(--accent-deep);
+  border-color: var(--accent-deep);
 }
 
 .btn-quiet {
-  background: transparent;
-  color: var(--ink);
+  background: var(--card);
+  color: var(--ink-soft);
   border-color: var(--rule);
 }
 
 .btn-quiet:hover {
-  background: #fff;
-  border-color: var(--ink);
+  background: var(--sunken);
+  border-color: var(--faint);
+  color: var(--ink);
 }
 
 .btn-sm {
-  padding: 7px 12px;
-  font-size: 11px;
+  padding: 7px 13px;
+  font-size: 12.5px;
 }
 
 /* --------------------------------------------------------------------------
@@ -729,33 +847,46 @@ textarea:focus {
 .docket {
   background: var(--card);
   border: 1px solid var(--rule);
-  border-top: 3px solid var(--ink);
-  border-radius: 2px;
-  padding: 18px;
+  border-radius: var(--r-lg);
+  box-shadow: var(--shadow-md);
+  padding: 22px 24px;
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
   gap: 20px;
   flex-wrap: wrap;
   margin-bottom: var(--gap);
+  position: relative;
+  overflow: hidden;
+}
+
+/* A thin indigo edge instead of the old 3px ink rule: it says "this is the
+   record" without drawing a box around the whole page. */
+.docket::before {
+  content: "";
+  position: absolute;
+  inset: 0 0 auto 0;
+  height: 3px;
+  background: linear-gradient(90deg, var(--accent), #818cf8);
 }
 
 .docket-id h1 {
   margin: 0;
   font-family: var(--mono);
-  font-size: 22px;
-  letter-spacing: 0.02em;
+  font-size: 23px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
 }
 
 .docket-id p {
-  margin: 5px 0 0;
+  margin: 6px 0 0;
   color: var(--muted);
   font-size: 13px;
 }
 
 .docket-actions {
   display: flex;
-  gap: 10px;
+  gap: 9px;
   flex-wrap: wrap;
 }
 
@@ -765,43 +896,41 @@ textarea:focus {
 
 .chip {
   display: inline-block;
-  font-family: var(--mono);
-  font-size: 10.5px;
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.09em;
-  padding: 3px 7px;
+  font-size: 11.5px;
+  font-weight: 650;
+  letter-spacing: 0.01em;
+  padding: 3px 10px;
   border: 1px solid;
-  border-radius: 2px;
+  border-radius: var(--r-pill);
   white-space: nowrap;
 }
 
 .chip-minor {
   color: var(--minor);
-  border-color: var(--minor);
+  border-color: #b6ddc9;
   background: var(--minor-wash);
 }
 
 .chip-moderate {
   color: var(--moderate);
-  border-color: var(--moderate);
+  border-color: #ecd3a4;
   background: var(--moderate-wash);
 }
 
 .chip-severe {
   color: var(--severe);
-  border-color: var(--severe);
+  border-color: #f3c4bf;
   background: var(--severe-wash);
 }
 
 .chip-none {
   color: var(--muted);
   border-color: var(--rule);
-  background: #f4f5f6;
+  background: var(--sunken);
 }
 
 .chip-stub {
-  color: var(--ink);
+  color: #78350f;
   border-color: var(--signal-deep);
   background: var(--signal);
 }
@@ -812,7 +941,7 @@ textarea:focus {
 
 .result-grid {
   display: grid;
-  grid-template-columns: minmax(0, 1.5fr) minmax(280px, 1fr);
+  grid-template-columns: minmax(0, 1.5fr) minmax(300px, 1fr);
   gap: var(--gap);
   align-items: start;
   margin-bottom: var(--gap);
@@ -821,9 +950,11 @@ textarea:focus {
 .plate {
   display: block;
   width: 100%;
-  background: #1b1f23;
+  background: #0f1729;
   border: 1px solid var(--rule);
-  border-radius: 2px;
+  border-radius: var(--r);
+  overflow: hidden;
+  box-shadow: var(--shadow-sm);
 }
 
 .plate img {
@@ -835,29 +966,29 @@ textarea:focus {
 .plate-caption {
   font-size: 12.5px;
   color: var(--muted);
-  padding: 10px 14px;
+  padding: 11px 14px;
   background: var(--card);
-  border-top: 1px solid var(--rule);
+  border-top: 1px solid var(--rule-soft);
 }
 
 /* --------------------------------------------------------------------------
    Contact sheet: every photograph of the walk-around, side by side.
 
    Auto-fill means the same markup handles one photograph and ten - a single
-   plate simply fills the row, which is the layout the page had before the
-   walk-around existed.
+   plate simply fills the row.
    -------------------------------------------------------------------------- */
 
 .plates {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(255px, 1fr));
   gap: 14px;
   min-width: 0;
 }
 
 /* A fixed aspect box so the rows line up whatever the phones produced, with
    `contain` rather than `cover`: this is evidence, and cropping it could hide
-   the damage the caption claims is there. The dark plate does the letterboxing. */
+   the damage the caption claims is there. The dark plate does the
+   letterboxing. */
 .plates .plate img {
   aspect-ratio: 4 / 3;
   object-fit: contain;
@@ -870,10 +1001,9 @@ textarea:focus {
 
 .plate-caption b {
   color: var(--ink);
-  font-family: var(--mono);
-  font-size: 11.5px;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
+  font-size: 12px;
+  font-weight: 650;
+  letter-spacing: 0;
 }
 
 /* --------------------------------------------------------------------------
@@ -892,10 +1022,10 @@ textarea:focus {
 .viewblock-head {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 13px;
   flex-wrap: wrap;
-  padding: 12px 18px;
-  background: #fbfbfc;
+  padding: 14px 20px;
+  background: var(--sunken);
   border-bottom: 1px solid var(--rule-soft);
 }
 
@@ -903,18 +1033,16 @@ textarea:focus {
   width: 62px;
   height: 46px;
   object-fit: cover;
+  border-radius: var(--r-xs);
   border: 1px solid var(--rule);
-  background: #1b1f23;
+  background: #0f1729;
   flex: none;
 }
 
 .viewblock-head h3 {
   margin: 0;
-  font-family: var(--mono);
-  font-size: 12px;
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.09em;
+  font-size: 13.5px;
+  font-weight: 650;
 }
 
 .viewblock-head .frame-meta {
@@ -926,10 +1054,11 @@ textarea:focus {
 .viewblock-head .frame-meta code {
   font-family: var(--mono);
   font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
 }
 
 .viewblock-empty {
-  padding: 14px 18px;
+  padding: 16px 20px;
   margin: 0;
   font-size: 13px;
   color: var(--muted);
@@ -944,16 +1073,14 @@ textarea:focus {
 
 .slab > dt,
 .slab > dd {
-  padding: 8px 0;
+  padding: 9px 0;
   border-bottom: 1px solid var(--rule-soft);
   min-width: 0;
 }
 
 .slab > dt {
-  font-family: var(--mono);
-  font-size: 10.5px;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
+  font-size: 12.5px;
+  font-weight: 500;
   color: var(--muted);
   padding-right: 18px;
   white-space: nowrap;
@@ -962,9 +1089,11 @@ textarea:focus {
 .slab > dd {
   margin: 0;
   font-family: var(--mono);
-  font-size: 13.5px;
+  font-size: 13px;
+  font-weight: 500;
   text-align: right;
   word-break: break-word;
+  font-variant-numeric: tabular-nums;
 }
 
 .slab > dt:last-of-type,
@@ -975,34 +1104,36 @@ textarea:focus {
 /* The single headline figure. */
 .headline {
   border-top: 1px solid var(--rule);
-  margin-top: 4px;
-  padding-top: 14px;
+  margin-top: 6px;
+  padding-top: 16px;
 }
 
 .headline .label {
-  font-family: var(--mono);
-  font-size: 10.5px;
+  font-size: 11.5px;
+  font-weight: 650;
   text-transform: uppercase;
-  letter-spacing: 0.1em;
+  letter-spacing: 0.08em;
   color: var(--muted);
 }
 
 .headline .figure {
   display: block;
   font-family: var(--mono);
-  font-size: 30px;
+  font-size: 32px;
   font-weight: 700;
-  letter-spacing: -0.02em;
-  line-height: 1.15;
-  margin-top: 4px;
+  letter-spacing: -0.03em;
+  line-height: 1.12;
+  margin-top: 5px;
+  font-variant-numeric: tabular-nums;
 }
 
 .headline .figure-note {
   display: block;
   font-size: 12.5px;
   color: var(--muted);
-  margin-top: 5px;
+  margin-top: 7px;
   font-family: var(--sans);
+  line-height: 1.5;
 }
 
 /* --------------------------------------------------------------------------
@@ -1023,27 +1154,28 @@ table.data caption {
   text-align: left;
   font-size: 12.5px;
   color: var(--muted);
-  padding: 0 18px 12px;
+  padding: 0 20px 12px;
 }
 
 table.data th,
 table.data td {
-  padding: 10px 12px;
+  padding: 11px 14px;
   border-bottom: 1px solid var(--rule-soft);
   text-align: left;
   vertical-align: top;
 }
 
+/* A light header rather than the inverted black band. The column names are
+   labels, not a headline, and they do not need that much weight. */
 table.data thead th {
-  background: var(--ink);
-  color: #fff;
-  font-family: var(--mono);
-  font-size: 10.5px;
-  font-weight: 700;
+  background: var(--sunken);
+  color: var(--muted);
+  font-size: 11.5px;
+  font-weight: 650;
   text-transform: uppercase;
-  letter-spacing: 0.08em;
+  letter-spacing: 0.06em;
   white-space: nowrap;
-  border-bottom: 0;
+  border-bottom: 1px solid var(--rule);
 }
 
 table.data tbody tr:last-child th,
@@ -1051,8 +1183,12 @@ table.data tbody tr:last-child td {
   border-bottom: 0;
 }
 
+table.data tbody tr {
+  transition: background 0.1s;
+}
+
 table.data tbody tr:hover td {
-  background: #fafbfc;
+  background: var(--sunken);
 }
 
 /* Numbers right-aligned and monospaced so columns of money compare down the
@@ -1076,17 +1212,20 @@ table.data .strong {
 }
 
 .thumb {
-  width: 56px;
-  height: 42px;
+  width: 58px;
+  height: 44px;
   object-fit: cover;
+  border-radius: var(--r-xs);
   border: 1px solid var(--rule);
   background: var(--paper);
   display: block;
 }
 
 .thumb-empty {
-  width: 56px;
-  height: 42px;
+  display: block;
+  width: 58px;
+  height: 44px;
+  border-radius: var(--r-xs);
   border: 1px dashed var(--rule);
   background: var(--paper);
 }
@@ -1096,8 +1235,8 @@ table.data .strong {
    --------------------------------------------------------------------------
    Shows the measured mask area against the two thresholds that banded it. The
    point is that severity here is a documented rule over a measurement, not a
-   prediction, so the rule and the measurement are drawn together and the reader
-   can check the verdict rather than trust it. */
+   prediction, so the rule and the measurement are drawn together and the
+   reader can check the verdict rather than trust it. */
 
 .meter {
   margin-top: 10px;
@@ -1106,10 +1245,10 @@ table.data .strong {
 
 .meter-track {
   position: relative;
-  height: 16px;
+  height: 18px;
   background: var(--paper);
   border: 1px solid var(--rule);
-  border-radius: 2px;
+  border-radius: var(--r-pill);
   overflow: hidden;
 }
 
@@ -1121,12 +1260,12 @@ table.data .strong {
 
 .zone-minor {
   background: var(--minor-wash);
-  border-right: 1px solid var(--rule);
+  border-right: 1px solid var(--card);
 }
 
 .zone-moderate {
   background: var(--moderate-wash);
-  border-right: 1px solid var(--rule);
+  border-right: 1px solid var(--card);
 }
 
 .zone-severe {
@@ -1142,6 +1281,8 @@ table.data .strong {
   width: 3px;
   margin-left: -1.5px;
   background: var(--ink);
+  border-radius: var(--r-pill);
+  box-shadow: 0 0 0 1.5px rgba(255, 255, 255, 0.9);
 }
 
 .meter-mark.is-minor {
@@ -1160,17 +1301,18 @@ table.data .strong {
   display: flex;
   justify-content: space-between;
   gap: 10px;
-  margin-top: 5px;
+  margin-top: 6px;
   font-family: var(--mono);
   font-size: 10.5px;
   color: var(--muted);
-  letter-spacing: 0.02em;
+  font-variant-numeric: tabular-nums;
 }
 
 .meter-rule {
-  margin: 7px 0 0;
+  margin: 8px 0 0;
   font-size: 12.5px;
-  color: var(--ink-soft);
+  color: var(--muted);
+  line-height: 1.5;
 }
 
 /* --------------------------------------------------------------------------
@@ -1180,7 +1322,7 @@ table.data .strong {
 .totals {
   margin-left: auto;
   width: 100%;
-  max-width: 380px;
+  max-width: 400px;
   border-collapse: collapse;
   font-size: 13.5px;
 }
@@ -1189,7 +1331,7 @@ table.data .strong {
   text-align: left;
   font-weight: 400;
   color: var(--ink-soft);
-  padding: 7px 12px;
+  padding: 8px 14px;
 }
 
 .totals td {
@@ -1197,7 +1339,7 @@ table.data .strong {
   font-family: var(--mono);
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
-  padding: 7px 12px;
+  padding: 8px 14px;
 }
 
 .totals tr.rule-above th,
@@ -1205,13 +1347,24 @@ table.data .strong {
   border-top: 1px solid var(--rule);
 }
 
+/* The payable line. Dark rather than hazard yellow: yellow now means "not
+   from a trained model" everywhere else on the site, and using it here for
+   emphasis would blunt that. */
 .totals tr.payable th,
 .totals tr.payable td {
-  background: var(--signal);
+  background: var(--ink);
+  color: #fff;
   font-weight: 700;
-  font-size: 15px;
-  color: var(--ink);
-  border-top: 2px solid var(--ink);
+  font-size: 15.5px;
+  border-top: 0;
+}
+
+.totals tr.payable th {
+  border-radius: var(--r-sm) 0 0 var(--r-sm);
+}
+
+.totals tr.payable td {
+  border-radius: 0 var(--r-sm) var(--r-sm) 0;
 }
 
 /* --------------------------------------------------------------------------
@@ -1222,30 +1375,37 @@ table.data .strong {
   margin: 0;
   padding-left: 20px;
   display: grid;
-  gap: 6px;
+  gap: 7px;
   font-size: 13.5px;
   color: var(--ink-soft);
 }
 
 .callout {
-  border: 1px solid var(--rule);
-  border-left: 4px solid var(--ink);
-  background: #f7f8f9;
-  padding: 13px 15px;
+  border: 1px solid var(--accent-line);
+  border-left: 3px solid var(--accent);
+  background: var(--accent-soft);
+  border-radius: var(--r-sm);
+  padding: 14px 16px;
   font-size: 13.5px;
+  color: var(--ink-soft);
 }
 
 .callout.danger {
+  border-color: #fecaca;
   border-left-color: var(--severe);
   background: var(--severe-wash);
 }
 
 .callout p {
-  margin: 0 0 6px;
+  margin: 0 0 7px;
 }
 
 .callout p:last-child {
   margin-bottom: 0;
+}
+
+.callout b {
+  color: var(--ink);
 }
 
 .callout code {
@@ -1255,18 +1415,18 @@ table.data .strong {
 
 .empty {
   text-align: center;
-  padding: 52px 20px;
+  padding: 58px 20px;
   color: var(--muted);
 }
 
 .empty h2 {
-  margin: 0 0 8px;
-  font-size: 17px;
+  margin: 0 0 9px;
+  font-size: 18px;
   color: var(--ink);
 }
 
 .empty p {
-  margin: 0 auto 18px;
+  margin: 0 auto 20px;
   max-width: 52ch;
   font-size: 14px;
 }
@@ -1281,26 +1441,29 @@ table.data .strong {
   padding: 0;
   list-style: none;
   display: grid;
-  gap: 15px;
+  gap: 16px;
 }
 
 .method li {
   counter-increment: step;
   display: grid;
   grid-template-columns: 26px minmax(0, 1fr);
-  gap: 12px;
+  gap: 13px;
   font-size: 13px;
-  color: var(--ink-soft);
+  color: var(--muted);
+  line-height: 1.55;
 }
 
 .method li::before {
   content: counter(step);
   font-family: var(--mono);
-  font-size: 11px;
+  font-size: 11.5px;
   font-weight: 700;
-  color: var(--ink);
-  background: var(--signal);
-  height: 22px;
+  color: var(--accent-deep);
+  background: var(--accent-soft);
+  border: 1px solid var(--accent-line);
+  height: 24px;
+  border-radius: var(--r-pill);
   display: grid;
   place-items: center;
 }
@@ -1308,44 +1471,123 @@ table.data .strong {
 .method b {
   display: block;
   color: var(--ink);
+  font-size: 13.5px;
+  font-weight: 650;
+  margin-bottom: 2px;
+}
+
+/* --------------------------------------------------------------------------
+   Disclosure - the long rationale, folded away
+   --------------------------------------------------------------------------
+   Every justification on this site stays on the page it justifies; it is just
+   closed by default so the figure is what you see first. Native
+   <details>/<summary>, so it works with no JavaScript, is keyboard operable
+   and is announced correctly by a screen reader - and it still prints open,
+   see the print rules at the bottom. */
+
+.disclosure {
+  border: 1px solid var(--rule);
+  border-radius: var(--r-sm);
+  background: var(--sunken);
+  margin-top: 14px;
+}
+
+.disclosure > summary {
+  cursor: pointer;
+  list-style: none;
+  padding: 10px 14px;
   font-size: 13px;
+  font-weight: 600;
+  color: var(--accent-deep);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border-radius: var(--r-sm);
+}
+
+.disclosure > summary::-webkit-details-marker {
+  display: none;
+}
+
+/* A chevron drawn in CSS - no icon font, no SVG sprite to ship. */
+.disclosure > summary::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-right: 1.5px solid currentColor;
+  border-bottom: 1.5px solid currentColor;
+  transform: rotate(-45deg);
+  transition: transform 0.15s;
+  flex: none;
+  margin-left: 2px;
+}
+
+.disclosure[open] > summary::before {
+  transform: rotate(45deg);
+}
+
+.disclosure > summary:hover {
+  background: var(--accent-soft);
+}
+
+.disclosure-body {
+  padding: 2px 14px 14px;
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--muted);
+  border-top: 1px solid var(--rule-soft);
+  margin-top: 0;
+  padding-top: 12px;
+}
+
+.disclosure-body > :first-child {
+  margin-top: 0;
+}
+
+.disclosure-body > :last-child {
+  margin-bottom: 0;
+}
+
+.disclosure-body b {
+  color: var(--ink);
 }
 
 /* --------------------------------------------------------------------------
    History page
    -------------------------------------------------------------------------- */
 
+/* Separate cards with a gap, rather than the old hairline-divided strip.
+   Each figure is its own object now. */
 .stat-strip {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 1px;
-  background: var(--rule);
-  border: 1px solid var(--rule);
-  border-radius: 2px;
+  gap: 14px;
   margin-bottom: var(--gap);
 }
 
 .stat {
   background: var(--card);
-  padding: 15px 17px;
+  border: 1px solid var(--rule);
+  border-radius: var(--r);
+  box-shadow: var(--shadow-sm);
+  padding: 16px 18px;
 }
 
 .stat .label {
   display: block;
-  font-family: var(--mono);
-  font-size: 10.5px;
-  text-transform: uppercase;
-  letter-spacing: 0.09em;
+  font-size: 12px;
+  font-weight: 600;
   color: var(--muted);
 }
 
 .stat .figure {
   display: block;
   font-family: var(--mono);
-  font-size: 22px;
+  font-size: 25px;
   font-weight: 700;
-  margin-top: 4px;
-  letter-spacing: -0.01em;
+  margin-top: 5px;
+  letter-spacing: -0.025em;
+  font-variant-numeric: tabular-nums;
 }
 
 .stat .figure.warn {
@@ -1357,7 +1599,7 @@ table.data .strong {
   gap: 10px;
   align-items: stretch;
   flex-wrap: wrap;
-  margin-bottom: 16px;
+  margin-bottom: 18px;
 }
 
 .searchbar input[type="search"] {
@@ -1375,8 +1617,7 @@ table.data .strong {
 }
 
 .pager .count {
-  font-family: var(--mono);
-  font-size: 12px;
+  font-size: 12.5px;
   color: var(--muted);
 }
 
@@ -1386,11 +1627,330 @@ table.data .strong {
 }
 
 /* --------------------------------------------------------------------------
+   Landing page: small typographic pieces
+   -------------------------------------------------------------------------- */
+
+/* Two columns of equal cards. Collapses to one at 980px with the rest. */
+.duo {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--gap);
+  align-items: start;
+  margin-bottom: var(--gap);
+}
+
+/* The opening paragraph of a card body: the sentence that says what the thing
+   below it means. Slightly larger than body copy and darker than a hint. */
+.lede {
+  margin: 0 0 16px;
+  font-size: 14px;
+  line-height: 1.6;
+  color: var(--ink-soft);
+  max-width: 74ch;
+}
+
+/* The qualification under a figure or a table. Small, but never grey enough to
+   read as decorative - on this site the caveat is part of the claim. */
+.footnote {
+  margin: 14px 0 0;
+  font-size: 12.5px;
+  line-height: 1.6;
+  color: var(--muted);
+  max-width: 82ch;
+}
+
+.footnote code {
+  font-family: var(--mono);
+  font-size: 11.5px;
+}
+
+/* Real subscript in "mAP50", rather than the digits inline. The metric names
+   are the whole vocabulary of this page and they should look like notation. */
+.stat .label .sub {
+  font-size: 9.5px;
+  font-weight: 600;
+  vertical-align: -0.15em;
+  letter-spacing: 0;
+}
+
+/* One line under a headline figure saying what it measures. Without it, four
+   monospaced decimals in a row are indistinguishable from each other. */
+.statnote {
+  display: block;
+  margin-top: 4px;
+  font-size: 11.5px;
+  line-height: 1.4;
+  color: var(--faint);
+}
+
+/* --------------------------------------------------------------------------
+   Dumbbell chart - per-class accuracy
+   --------------------------------------------------------------------------
+   Two measurements of one quantity at different strictness, joined by the
+   distance between them. The gap is the finding, so the connector is drawn
+   heavier than the gridlines and the two dots share a hue.
+
+   All geometry comes precomputed from the view in SVG user units; there is no
+   width attribute, only a viewBox, so this scales to whatever the card is
+   wide. Nothing here sets a size in pixels. */
+
+.chart-dumbbell {
+  display: block;
+  width: 100%;
+  height: auto;
+  margin: 4px 0 18px;
+  overflow: visible;
+}
+
+/* Hairline, solid, and behind the marks. Never dashed: a dashed gridline in a
+   chart whose subject is a horizontal distance competes with the data. */
+.chart-grid {
+  stroke: var(--rule-soft);
+  stroke-width: 1;
+  shape-rendering: crispEdges;
+}
+
+.chart-axis {
+  stroke: var(--rule);
+  stroke-width: 1;
+  shape-rendering: crispEdges;
+}
+
+.chart-tick {
+  fill: var(--faint);
+  font-family: var(--mono);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+}
+
+.chart-class {
+  fill: var(--ink-soft);
+  font-family: var(--sans);
+  font-size: 11.5px;
+  font-weight: 600;
+}
+
+/* The connector. Heavier than the gridlines, lighter than the dots, rounded so
+   a short gap still reads as a segment rather than a smudge. */
+.chart-link {
+  stroke: var(--accent-line);
+  stroke-width: 3;
+  stroke-linecap: round;
+}
+
+.chart-dot {
+  stroke: var(--card);
+  stroke-width: 1.5;
+}
+
+/* One hue, two shades. The deeper shade is the strict measurement, because it
+   is the one that describes what the pipeline actually depends on - visual
+   weight follows importance, not magnitude. */
+.dot-strict {
+  fill: var(--accent-deep);
+}
+
+.dot-loose {
+  fill: #a5b4fc;
+}
+
+.chart-value {
+  fill: var(--ink);
+  font-family: var(--mono);
+  font-size: 10.5px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Legend. In HTML rather than in the SVG so it wraps, stays selectable and
+   scales with the reader's font size. */
+.chart-key {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 18px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.key-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.key-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: var(--r-pill);
+  flex: none;
+}
+
+/* The swatches reuse the fill rules above, which are SVG properties and do not
+   apply to a <span> - so the two shades are restated here. Kept adjacent to
+   their definitions above so the pair cannot drift apart unnoticed. */
+.key-dot.dot-strict {
+  background: var(--accent-deep);
+}
+
+.key-dot.dot-loose {
+  background: #a5b4fc;
+}
+
+.key-note {
+  color: var(--faint);
+  font-style: italic;
+}
+
+/* --------------------------------------------------------------------------
+   Stacked bar - severity mix
+   --------------------------------------------------------------------------
+   Part-to-whole across three grades plus "nothing found", so one bar rather
+   than three. The grades keep the frozen severity colours instead of taking
+   chart colours, because they mean the same thing here as everywhere else on
+   the site - and every segment is labelled underneath, since a status colour
+   must never be the only thing carrying the meaning. */
+
+.stackbar {
+  display: flex;
+  height: 30px;
+  border-radius: var(--r-xs);
+  overflow: hidden;
+  background: var(--sunken);
+  border: 1px solid var(--rule);
+}
+
+.stackbar-seg {
+  display: grid;
+  place-items: center;
+  font-family: var(--mono);
+  font-size: 11px;
+  font-weight: 700;
+  color: #fff;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.seg-minor {
+  background: var(--minor);
+}
+
+.seg-moderate {
+  background: var(--moderate);
+}
+
+.seg-severe {
+  background: var(--severe);
+}
+
+/* Assessed and clean is a real outcome, not an absence, so it is a segment
+   rather than a gap - but a neutral one, since "no damage found" is not a
+   severity grade. Dark text: the wash is too light to carry white. */
+.seg-none {
+  background: var(--rule);
+  color: var(--ink-soft);
+}
+
+.stackbar-key {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 18px;
+  margin: 12px 0 0;
+  padding: 0;
+  list-style: none;
+  font-size: 12.5px;
+  color: var(--muted);
+}
+
+.stackbar-key li {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.stackbar-key .swatch {
+  width: 9px;
+  height: 9px;
+  border-radius: 2px;
+  flex: none;
+}
+
+.stackbar-key b {
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+}
+
+/* --------------------------------------------------------------------------
+   Bar list - which damage classes actually turn up
+   --------------------------------------------------------------------------
+   Magnitude across categories, so plain bars in one hue. Colouring the classes
+   separately would imply a distinction the data does not carry: these are seven
+   counts of the same kind of thing.
+
+   Bars are scaled to the largest count, not to the total, because the question
+   is "which of these is most common" - scaling to the total flattens every bar
+   into illegibility as the class count grows. */
+
+.barlist {
+  display: grid;
+  gap: 10px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.barlist li {
+  display: grid;
+  grid-template-columns: 128px minmax(0, 1fr) 78px;
+  align-items: center;
+  gap: 12px;
+  font-size: 12.5px;
+}
+
+.bar-label {
+  color: var(--ink-soft);
+  font-weight: 600;
+}
+
+.bar-track {
+  height: 9px;
+  background: var(--sunken);
+  border-radius: var(--r-pill);
+  overflow: hidden;
+}
+
+.bar-fill {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+  border-radius: var(--r-pill);
+  /* A single detection must still be visible, so the fill has a floor. */
+  min-width: 3px;
+}
+
+.bar-count {
+  font-family: var(--mono);
+  font-size: 11.5px;
+  color: var(--muted);
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.bar-count b {
+  color: var(--ink);
+}
+
+/* --------------------------------------------------------------------------
    Narrow screens
    -------------------------------------------------------------------------- */
 
-@media (max-width: 900px) {
+@media (max-width: 980px) {
   .result-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .duo {
     grid-template-columns: minmax(0, 1fr);
   }
 
@@ -1404,20 +1964,38 @@ table.data .strong {
     grid-template-columns: minmax(0, 1fr);
   }
 
+  /* The class-name column is a fixed 128px, which stops being a sensible share
+     of the row on a phone. Label above the bar instead of beside it. */
+  .barlist li {
+    grid-template-columns: minmax(0, 1fr) 78px;
+  }
+
+  .bar-label {
+    grid-column: 1 / -1;
+  }
+
+  .page-head h1 {
+    font-size: 22px;
+  }
+
   .docket-id h1 {
     font-size: 18px;
   }
 
   .headline .figure {
-    font-size: 25px;
+    font-size: 26px;
+  }
+
+  .masthead {
+    position: static;
   }
 }
 
 /* --------------------------------------------------------------------------
    Print
-   -------------------------------------------------------------------------- */
-/* The real deliverable is the generated PDF, but a printed results page should
-   not waste ink on chrome or carry links nobody can click. */
+   --------------------------------------------------------------------------
+   The real deliverable is the generated PDF, but a printed results page
+   should not waste ink on chrome or carry links nobody can click. */
 
 @media print {
   body {
@@ -1434,8 +2012,43 @@ table.data .strong {
   }
 
   .card,
-  .docket {
+  .docket,
+  .stat {
     border-color: #999;
+    box-shadow: none;
     break-inside: avoid;
+  }
+
+  /* Printers commonly drop background colours, which would leave the severity
+     mix as one empty outline and the class bars as empty tracks. Forcing the
+     fills keeps a printed chart readable; the labels beside every segment mean
+     the figures survive even if a printer ignores this. */
+  .stackbar-seg,
+  .bar-fill,
+  .stackbar-key .swatch,
+  .key-dot {
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+
+  /* A folded justification must not vanish from a printed page: on paper
+     there is nothing to click, so every disclosure is forced open. Targeting
+     the children of a closed <details> is what actually works - the element
+     hides its own contents, so styling .disclosure-body alone does nothing. */
+  .disclosure {
+    background: none;
+    border-color: #bbb;
+  }
+
+  .disclosure > summary {
+    color: #000;
+  }
+
+  .disclosure > summary::before {
+    display: none;
+  }
+
+  .disclosure:not([open]) > :not(summary) {
+    display: block !important;
   }
 }

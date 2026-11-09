@@ -20,7 +20,7 @@ Base template. Three things live here rather than in each page:
 
 <header class="masthead">
   <div class="wrap masthead-inner">
-    <a class="brand" href="{% url 'assessment:upload' %}">
+    <a class="brand" href="{% url 'assessment:landing' %}">
       <span class="brand-mark">VDA</span>
       <span class="brand-text">
         Vehicle Damage Assessment
@@ -29,18 +29,30 @@ Base template. Three things live here rather than in each page:
     </a>
     {% with here=request.resolver_match.url_name %}
     <nav aria-label="Main">
+      {% comment %}
+      The brand links here too, which is the usual convention, but the overview
+      carries the measured accuracy and the limitation that qualifies every
+      figure on the site - too important to be reachable only by knowing that
+      the logo is clickable.
+      {% endcomment %}
+      <a href="{% url 'assessment:landing' %}" {% if here == 'landing' %}aria-current="page"{% endif %}>Overview</a>
       <a href="{% url 'assessment:upload' %}" {% if here == 'upload' %}aria-current="page"{% endif %}>New inspection</a>
       <a href="{% url 'assessment:history' %}" {% if here == 'history' or here == 'result' %}aria-current="page"{% endif %}>Records</a>
-      <a href="/api/inspections/">API</a>
+      {% if request.user.is_staff %}
       <a href="/admin/">Admin</a>
+      {% else %}
+      <a href="/admin/">Sign in</a>
+      {% endif %}
     </nav>
     {% endwith %}
   </div>
 </header>
 
 {% if detector.using_stub %}
-{# Deliberately loud. The stub detector returns fixed, invented regions; a demo
-   that showed those without saying so would be presenting fabricated results. #}
+{% comment %}
+Deliberately loud. The stub detector returns fixed, invented regions; a demo
+that showed those without saying so would be presenting fabricated results.
+{% endcomment %}
 <div class="notice-stub" role="alert">
   <div class="wrap notice-stub-body">
     <strong>No trained model</strong>

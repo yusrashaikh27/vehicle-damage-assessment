@@ -38,6 +38,11 @@ is anything domain-specific, and those are the checks added here:
    the *area* of a mask, so on a 100x60 thumbnail a real dent is a handful of
    pixels and the quotation built from it is meaningless. Refusing the image is
    more honest than pricing a guess.
+5. **A real Indian registration number and mobile number.** The estimate is a
+   record tied to a vehicle and an owner someone may need to contact, so a
+   made-up plate or a number that cannot be dialled is rejected rather than
+   stored. Both are normalised to one canonical form, which is what makes
+   searching the records reliable.
 """
 
 from __future__ import annotations
@@ -58,17 +63,78 @@ MAX_TOTAL_UPLOAD_BYTES = 40 * 1024 * 1024    # 40 MB for the whole walk-around
 ALLOWED_FORMATS = {"JPEG", "PNG", "WEBP"}
 MIN_EDGE_PX = 320                            # shortest side
 
-# Registration plates vary far more than tutorials assume - old-format state
-# plates, BH series, trade plates, imports - so this only enforces the shape all
-# of them share rather than one country's current pattern. Rejecting a valid
-# plate would block a real inspection to enforce a rule nobody asked for.
-PLATE_RE = re.compile(r"^[A-Z0-9][A-Z0-9 \-]{2,19}$")
+# ---------------------------------------------------------------------------
+# Registration number and phone number
+# ---------------------------------------------------------------------------
 
-# Indian mobile and landline numbers, optionally with +91 and separators. Kept
-# deliberately loose for the same reason as the plate pattern: this is a contact
-# number for a workshop to ring, and rejecting a valid one to enforce a format
-# helps nobody.
-PHONE_RE = re.compile(r"^\+?[\d][\d \-]{7,17}$")
+# RTO state / union-territory codes. Includes the codes still seen on older
+# plates (TS, OR, DD, DN) alongside the current ones (TG, OD), because a car
+# registered in 2015 still carries the code it was issued with.
+STATE_CODES = (
+    "AN|AP|AR|AS|BR|CG|CH|DD|DL|DN|GA|GJ|HP|HR|JH|JK|KA|KL|LA|LD|MH|ML|MN|MP|"
+    "MZ|NL|OD|OR|PB|PY|RJ|SK|TG|TN|TR|TS|UK|UP|WB"
+)
+
+# Standard plate: state code, 1-2 digit district, 0-3 series letters, 4 digits.
+#   KA14EX4821  /  DL1CAB1234  /  MH12DE1433  /  KA011234
+STANDARD_PLATE_RE = re.compile(
+    rf"^(?P<state>{STATE_CODES})(?P<district>\d{{1,2}})"
+    rf"(?P<series>[A-Z]{{0,3}})(?P<number>\d{{4}})$"
+)
+
+# Bharat series: two-digit year, "BH", four digits, one or two letters.
+#   22BH1234AA
+BHARAT_PLATE_RE = re.compile(
+    r"^(?P<year>\d{2})BH(?P<number>\d{4})(?P<series>[A-Z]{1,2})$"
+)
+
+# Indian mobile numbers: ten digits starting 6-9, with an optional +91, 91 or 0
+# in front. A landline or an obviously made-up number such as 1234567899 does
+# not match.
+MOBILE_RE = re.compile(r"^(?:\+?91|0)?(?P<number>[6-9]\d{9})$")
+
+
+def normalise_registration(value: str) -> str:
+    """Upper-case a plate and strip spaces and hyphens: 'ka 14-ex 4821' -> 'KA14EX4821'."""
+    return re.sub(r"[\s\-]", "", (value or "").upper())
+
+
+def validate_registration_number(value: str) -> str:
+    """Return the plate in canonical spaced form, or raise ValidationError.
+
+    Module-level, like `validate_photograph`, so the API and any management
+    command apply exactly the same rule as the web form.
+    """
+    compact = normalise_registration(value)
+
+    match = STANDARD_PLATE_RE.match(compact)
+    if match:
+        parts = [match["state"], match["district"], match["series"], match["number"]]
+        return " ".join(part for part in parts if part)
+
+    match = BHARAT_PLATE_RE.match(compact)
+    if match:
+        return f"{match['year']} BH {match['number']} {match['series']}"
+
+    raise ValidationError(
+        "Enter a valid Indian registration number, for example KA 14 EX 4821 "
+        "or 22 BH 1234 AA.",
+        code="invalid_registration",
+    )
+
+
+def validate_phone_number(value: str) -> str:
+    """Return a mobile number as '+91 98765 43210', or raise ValidationError."""
+    compact = re.sub(r"[\s\-()]", "", value or "")
+    match = MOBILE_RE.match(compact)
+    if not match:
+        raise ValidationError(
+            "Enter a valid 10-digit Indian mobile number starting with 6, 7, 8 "
+            "or 9 - for example +91 98765 43210.",
+            code="invalid_phone",
+        )
+    number = match["number"]
+    return f"+91 {number[:5]} {number[5:]}"
 
 
 def _style(field: forms.Field) -> None:
@@ -228,25 +294,12 @@ class InspectionForm(forms.ModelForm):
         return name
 
     def clean_owner_phone(self) -> str:
-        raw = (self.cleaned_data["owner_phone"] or "").strip()
-        phone = re.sub(r"\s+", " ", raw)
-        if not PHONE_RE.match(phone):
-            raise ValidationError(
-                "Enter a contact number with at least 8 digits - for example "
-                "+91 98765 43210."
-            )
-        return phone
+        return validate_phone_number(self.cleaned_data["owner_phone"])
 
     def clean_registration_number(self) -> str:
-        raw = (self.cleaned_data["registration_number"] or "").upper()
-        # Collapse runs of whitespace so "KA14  EX4821" and "KA 14 EX 4821"
-        # become the same stored value, which is what makes search work.
-        plate = re.sub(r"\s+", " ", raw).strip()
-        if not PLATE_RE.match(plate):
-            raise ValidationError(
-                "Use letters, digits, spaces or hyphens - for example KA 14 EX 4821."
-            )
-        return plate
+        # Stored in one canonical spaced form, so "ka14ex4821" and
+        # "KA 14 EX 4821" become the same value, which is what makes search work.
+        return validate_registration_number(self.cleaned_data["registration_number"])
 
     def clean_vehicle_year(self) -> int:
         year = self.cleaned_data["vehicle_year"]

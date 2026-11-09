@@ -15,13 +15,17 @@ stored record rather than from the model's live output, which means the document
 and the database can never disagree - and regenerating an old report produces the
 same figures rather than whatever the current weights would say.
 
-**Money is printed as "Rs.", not the rupee sign.** ₹ is U+20B9, added to Unicode
+**Money is printed as "Rs.", not the rupee sign.** U+20B9 was added to Unicode
 in 2010. PDF's built-in Helvetica is a Type 1 font from the 1980s and has no
 glyph for it, so the character silently renders as a black box - the kind of
-defect you only notice in the printed copy. Embedding a TrueType font would fix
-it and add a font file the demo has to find at runtime; "Rs." is unambiguous, is
-what Indian workshop invoices print anyway, and cannot break. The web pages use ₹
-freely, because a browser has fonts.
+defect you only notice in the printed copy. "Rs." is unambiguous, is what Indian
+workshop invoices print anyway, and cannot break. The web pages use the rupee
+sign freely, because a browser has fonts.
+
+**Every figure is a range.** Each cost line, the subtotal, the GST and the
+estimated total are all low-high ranges taken from the rate card (see
+core.cost). The stored lows and highs are printed as they were saved, so
+regenerating an old report gives the same numbers.
 """
 
 from __future__ import annotations
@@ -44,6 +48,7 @@ from reportlab.platypus import (
     TableStyle,
 )
 
+from .cost import range_step_text
 from .damage_config import CURRENCY, GST_RATE
 
 # Palette shared with the web pages: workshop primer grey and ink, with the
@@ -97,14 +102,8 @@ class ReportCostLine:
     component_label: str
     action: str
     instances: int
-    part_cost: float
-    labour_cost: float
-    paint_cost: float
-    labour_hours: float
-
-    @property
-    def subtotal(self) -> float:
-        return self.part_cost + self.labour_cost + self.paint_cost
+    low: float
+    high: float
 
 
 @dataclass
@@ -123,12 +122,14 @@ class ReportData:
     views: list[ReportView] = field(default_factory=list)
     detections: list[ReportDetection] = field(default_factory=list)
     cost_lines: list[ReportCostLine] = field(default_factory=list)
-    parts_total: float = 0.0
-    labour_total: float = 0.0
-    paint_total: float = 0.0
-    subtotal: float = 0.0
-    gst_amount: float = 0.0
-    total: float = 0.0
+    # Subtotal and GST as ranges, then the presented total (GST included,
+    # rounded outward). All stored on the inspection when it was assessed.
+    subtotal_low: float = 0.0
+    subtotal_high: float = 0.0
+    gst_low: float = 0.0
+    gst_high: float = 0.0
+    range_low: float = 0.0
+    range_high: float = 0.0
     notes: list[str] = field(default_factory=list)
     model_name: str = ""
     is_stub: bool = False
@@ -176,6 +177,13 @@ def rupees(amount: float) -> str:
     return f"{'-' if negative else ''}Rs. {whole}"
 
 
+def rupee_range(low: float, high: float) -> str:
+    """'Rs. 12,000 - Rs. 18,500'. Prefix printed on both ends so it reads cleanly."""
+    if low == high:
+        return rupees(low)
+    return f"{rupees(low)} - {rupees(high)}"
+
+
 def _styles() -> dict[str, ParagraphStyle]:
     base = getSampleStyleSheet()
     return {
@@ -200,15 +208,20 @@ def _styles() -> dict[str, ParagraphStyle]:
             "body", parent=base["Normal"], fontName="Helvetica",
             fontSize=8.5, leading=11.5, textColor=INK,
         ),
+        # Value cells of the vehicle block. A Paragraph, not a plain string, so a
+        # long value (a phone number plus an email) wraps inside its cell instead
+        # of running out past the edge of the table.
+        "kv": ParagraphStyle(
+            "kv", parent=base["Normal"], fontName="Helvetica-Bold",
+            fontSize=8, leading=10, textColor=INK,
+        ),
         "cell": ParagraphStyle(
             "cell", parent=base["Normal"], fontName="Helvetica",
             fontSize=7.8, leading=10, textColor=INK,
         ),
         # Header cells need their own style rather than relying on the table's
         # TEXTCOLOR: a Paragraph carries its own colour, and that colour wins
-        # over the enclosing TableStyle. Setting white here and black in the
-        # TableStyle is what makes an inverted header row legible - without it
-        # the text is ink-on-ink and the header reads as a solid black bar.
+        # over the enclosing TableStyle.
         "cellhead": ParagraphStyle(
             "cellhead", parent=base["Normal"], fontName="Helvetica-Bold",
             fontSize=7.8, leading=10, textColor=colors.white,
@@ -236,11 +249,8 @@ def _scaled_image(path: Path, max_width: float,
                   max_height: float) -> PdfImage | None:
     """Fit an image inside a box without distorting it.
 
-    reportlab will happily stretch an image to whatever width and height it is
-    given, so the aspect ratio has to be preserved here. Returns None when the
-    file is missing or unreadable rather than raising - a report without its
-    photograph is still a useful report, and losing the whole PDF over one
-    missing file would be the wrong trade.
+    Returns None when the file is missing or unreadable rather than raising - a
+    report without its photograph is still a useful report.
     """
     try:
         from PIL import Image as PILImage
@@ -264,9 +274,6 @@ def _page_furniture(canvas, doc) -> None:
     """Drawn on every page: the signal rule at the top, a footer, page number."""
     canvas.saveState()
 
-    # A 3pt hazard-yellow bar across the head of the page. This is the one
-    # decorative element, and it ties the PDF to the web pages so a printed
-    # report is recognisably from the same system.
     canvas.setFillColor(SIGNAL)
     canvas.rect(0, A4[1] - 4 * mm, A4[0], 4 * mm, stroke=0, fill=1)
 
@@ -311,12 +318,7 @@ def _header(data: ReportData, st: dict) -> list:
 
 
 def _stub_banner(st: dict) -> list:
-    """Loud, unmissable warning that these numbers are placeholders.
-
-    Only reachable when no trained weights were installed. A demo that shows
-    fabricated detections without saying so is the single worst outcome for this
-    project, so the warning is a filled red-edged block, not a footnote.
-    """
+    """Loud, unmissable warning that these numbers are placeholders."""
     text = Paragraph(
         "PLACEHOLDER RESULTS - no trained model was installed when this "
         "inspection ran. The detections and costs below were produced by the "
@@ -340,12 +342,14 @@ def _vehicle_block(data: ReportData, st: dict) -> list:
     if data.owner_email:
         contact = f"{data.owner_phone}, {data.owner_email}"
 
+    # The contact value is a Paragraph so a long phone-plus-email string wraps
+    # inside its cell rather than overflowing the table.
     rows = [
-        ["Owner", data.owner_name, "Contact", contact],
+        ["Owner", data.owner_name, "Contact", Paragraph(contact, st["kv"])],
         ["Registration", data.registration_number,
          "Segment", data.segment_label],
         ["Make and model", f"{data.vehicle_make} {data.vehicle_model}",
-         "Panels inspected", data.panels_inspected],
+         "Panels inspected", Paragraph(data.panels_inspected, st["kv"])],
         ["Year", str(data.vehicle_year),
          "Overall severity", data.overall_severity_label or "-"],
     ]
@@ -361,19 +365,14 @@ def _vehicle_block(data: ReportData, st: dict) -> list:
         ("FONTSIZE", (0, 0), (-1, -1), 8),
         ("TEXTCOLOR", (0, 0), (0, -1), MUTED),
         ("TEXTCOLOR", (2, 0), (2, -1), MUTED),
+        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
         ("BACKGROUND", (0, 0), (-1, -1), WASH),
         ("BOX", (0, 0), (-1, -1), 0.5, RULE),
         ("INNERGRID", (0, 0), (-1, -1), 0.5, colors.white),
         ("TOPPADDING", (0, 0), (-1, -1), 5),
         ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
         ("LEFTPADDING", (0, 0), (-1, -1), 6),
-        # Contact details are typed by hand and can be long, so this one cell is
-        # allowed to shrink rather than pushing the table off the page.
-        ("FONTSIZE", (3, 0), (3, 0), 7.4),
     ]
-    # Colour the severity value to match the web page and the severity legend.
-    # Indexed off the row count rather than hard-coded, so adding a row above it
-    # cannot silently paint the wrong cell.
     colour = SEVERITY_COLOURS.get(data.overall_severity_label)
     if colour is not None:
         style.append(("TEXTCOLOR", (3, severity_row), (3, severity_row), colour))
@@ -415,15 +414,11 @@ def _views_block(data: ReportData, st: dict) -> list:
         if image is not None:
             block.append(image)
         else:
-            # Say so rather than leaving a gap: a missing photograph in an
-            # inspection report is information, not an empty space.
             block.append(Paragraph("Photograph unavailable.", st["small"]))
         block.append(Spacer(1, 2))
         block.append(Paragraph(caption, st["small"]))
         cells.append(block)
 
-    # Pad the last row so every row has the same number of columns, which
-    # reportlab requires.
     while len(cells) % VIEW_COLUMNS:
         cells.append("")
 
@@ -477,7 +472,9 @@ def _detections_table(data: ReportData, st: dict) -> list:
             Paragraph(det.reason, st["small"]),
         ])
 
-    widths = [CONTENT_WIDTH * w for w in (0.15, 0.16, 0.11, 0.10, 0.08, 0.40)]
+    # "Confidence" is wider than before: at 10% the header wrapped to
+    # "Confidenc / e".
+    widths = [CONTENT_WIDTH * w for w in (0.15, 0.15, 0.10, 0.12, 0.08, 0.40)]
     table = Table(rows, colWidths=widths, repeatRows=1)
     style = [
         ("BACKGROUND", (0, 0), (-1, 0), INK),
@@ -512,13 +509,13 @@ def _detections_table(data: ReportData, st: dict) -> list:
 
 
 def _quotation_table(data: ReportData, st: dict) -> list:
+    """One row per cost line, each line's cost shown as a range (before GST)."""
     if not data.cost_lines:
         return []
 
-    header = ["Damage", "Component", "Repair action", "Qty", "Hrs",
-              "Parts", "Labour", "Paint", "Line total"]
-    # Numeric headers right-aligned so they sit over the figures they label.
-    numeric = {3, 4, 5, 6, 7, 8}
+    header = ["Damage", "Component", "Repair action", "Qty",
+              "Line cost (excl. GST)"]
+    numeric = {3, 4}
     rows: list[list] = [[
         Paragraph(text, st["cellnumhead"] if i in numeric else st["cellhead"])
         for i, text in enumerate(header)
@@ -530,19 +527,10 @@ def _quotation_table(data: ReportData, st: dict) -> list:
             Paragraph(line.component_label, st["cell"]),
             Paragraph(line.action, st["cell"]),
             Paragraph(str(line.instances), st["cellnum"]),
-            Paragraph(f"{line.labour_hours:.2f}", st["cellnum"]),
-            Paragraph(rupees(line.part_cost), st["cellnum"]),
-            Paragraph(rupees(line.labour_cost), st["cellnum"]),
-            Paragraph(rupees(line.paint_cost), st["cellnum"]),
-            Paragraph(f"<b>{rupees(line.subtotal)}</b>", st["cellnum"]),
+            Paragraph(f"<b>{rupee_range(line.low, line.high)}</b>", st["cellnum"]),
         ])
 
-    # Widths tuned so no money cell wraps: "Rs. 10,100" is ten Courier
-    # characters, and a wrapped currency figure ("Rs. 2,5" / "00") is unreadable
-    # on an invoice. Descriptive columns absorb the space instead, because prose
-    # wraps gracefully and numbers do not.
-    widths = [CONTENT_WIDTH * w for w in
-              (0.145, 0.115, 0.185, 0.045, 0.055, 0.105, 0.105, 0.09, 0.155)]
+    widths = [CONTENT_WIDTH * w for w in (0.20, 0.17, 0.28, 0.05, 0.30)]
     table = Table(rows, colWidths=widths, repeatRows=1)
     table.setStyle(TableStyle([
         ("BACKGROUND", (0, 0), (-1, 0), INK),
@@ -557,51 +545,72 @@ def _quotation_table(data: ReportData, st: dict) -> list:
 
 
 def _totals_block(data: ReportData, st: dict) -> list:
-    """The totals, right-aligned, with the payable figure in a filled box."""
+    """Subtotal, GST and the estimated total - all three as ranges.
+
+    The subtotal is the sum of the line ranges above, GST is added to each end,
+    and the last row is the estimated total the owner should plan for: that range
+    rounded outward to a round figure. All three come from the stored record, so
+    regenerating the PDF for an old inspection prints the same numbers.
+    """
+    if not data.cost_lines:
+        return []
+
     gst_label = f"GST at {GST_RATE * 100:.0f}%"
+    total = (rupee_range(data.range_low, data.range_high)
+             if data.range_high > 0 else rupees(0))
+
     rows = [
-        ["Parts", rupees(data.parts_total)],
-        ["Labour", rupees(data.labour_total)],
-        ["Paint material", rupees(data.paint_total)],
-        ["Subtotal", rupees(data.subtotal)],
-        [gst_label, rupees(data.gst_amount)],
-        ["Estimated total", rupees(data.total)],
+        ["Repair subtotal (excl. GST)",
+         rupee_range(data.subtotal_low, data.subtotal_high)],
+        [gst_label, rupee_range(data.gst_low, data.gst_high)],
+        ["Estimated total", total],
     ]
-    inner = Table(rows, colWidths=[38 * mm, 32 * mm])
+    last = len(rows) - 1
+
+    box_width = 124 * mm
+    inner = Table(rows, colWidths=[44 * mm, 80 * mm])
     inner.setStyle(TableStyle([
         ("FONTNAME", (0, 0), (0, -1), "Helvetica"),
         ("FONTNAME", (1, 0), (1, -1), "Courier"),
         ("FONTSIZE", (0, 0), (-1, -1), 8.5),
         ("ALIGN", (1, 0), (1, -1), "RIGHT"),
-        ("LINEABOVE", (0, 3), (-1, 3), 0.5, RULE),
-        # The payable line: heavier type on the signal colour, so the eye lands
-        # on it first. This is the number the reader opened the report for.
-        ("FONTNAME", (0, 5), (-1, 5), "Helvetica-Bold"),
-        ("FONTSIZE", (0, 5), (-1, 5), 10.5),
-        ("BACKGROUND", (0, 5), (-1, 5), SIGNAL),
-        ("LINEABOVE", (0, 5), (-1, 5), 1.2, INK),
+        # The payable line, a range: heavier type on the signal colour.
+        ("FONTNAME", (0, last), (-1, last), "Helvetica-Bold"),
+        ("FONTSIZE", (0, last), (-1, last), 10),
+        ("BACKGROUND", (0, last), (-1, last), SIGNAL),
+        ("LINEABOVE", (0, last), (-1, last), 1.2, INK),
         ("TOPPADDING", (0, 0), (-1, -1), 3.5),
         ("BOTTOMPADDING", (0, 0), (-1, -1), 3.5),
-        ("TOPPADDING", (0, 5), (-1, 5), 6),
-        ("BOTTOMPADDING", (0, 5), (-1, 5), 6),
+        ("TOPPADDING", (0, last), (-1, last), 6),
+        ("BOTTOMPADDING", (0, last), (-1, last), 6),
         ("LEFTPADDING", (0, 0), (-1, -1), 6),
         ("RIGHTPADDING", (0, 0), (-1, -1), 6),
     ]))
 
-    wrapper = Table([[ "", inner ]],
-                    colWidths=[CONTENT_WIDTH - 70 * mm, 70 * mm])
+    wrapper = Table([["", inner]],
+                    colWidths=[CONTENT_WIDTH - box_width, box_width])
     wrapper.setStyle(TableStyle([
         ("LEFTPADDING", (0, 0), (-1, -1), 0),
         ("RIGHTPADDING", (0, 0), (-1, -1), 0),
         ("VALIGN", (0, 0), (-1, -1), "TOP"),
     ]))
-    return [wrapper, Spacer(1, 10)]
+
+    footnote = Paragraph(
+        "Every figure is a range from the rate card. The subtotal is the sum of "
+        "the line ranges, and the estimated total includes GST, rounded outward.",
+        st["small"],
+    )
+    # Kept together so the totals are never split from their footnote.
+    return [KeepTogether([wrapper, Spacer(1, 4), footnote]), Spacer(1, 10)]
 
 
 def _notes_block(data: ReportData, st: dict) -> list:
-    if not data.notes:
+    # Notes come from core.cost, stored with the inspection, so the saved record
+    # and the PDF always say the same thing.
+    notes = list(data.notes)
+    if not notes:
         return []
-    items = "".join(f"<br/>&bull;&nbsp; {note}" for note in data.notes)
+    items = "".join(f"<br/>&bull;&nbsp; {note}" for note in notes)
     return [
         Paragraph("How this estimate was reached", st["h2"]),
         Paragraph(items.lstrip("<br/>"), st["small"]),
@@ -615,8 +624,15 @@ def _provenance_block(data: ReportData, st: dict) -> list:
         f"<b>Rate card:</b> {data.cost_source}",
         "<b>Method:</b> damage located and outlined by a YOLO11 segmentation "
         "model; severity derived from mask area against documented per-class "
-        "thresholds; cost assembled from a fixed rate card of part prices, "
-        "labour hours and paint material.",
+        "thresholds; cost assembled from a published repair price list that "
+        "gives a low and a high price for each panel.",
+        f"<b>Estimated range:</b> every cost figure is a range. Each line takes "
+        f"its low and high from the price list, placed inside it according to "
+        f"the severity; the subtotal is the sum of the lines, GST is added to "
+        f"both ends, and the estimated total is rounded outward to round "
+        f"figures ({range_step_text()}). The placement inside each range and "
+        f"the 40% charge for repeated damage are judgements, not measured "
+        f"figures.",
         "<b>Limitations:</b> the model was trained on photographs of cars only. "
         "Area is measured relative to the frame, so how close the camera was "
         "affects the severity band. Prices are indicative and exclude "
@@ -666,8 +682,6 @@ def build_report(data: ReportData, out_path: Path | str) -> Path:
     story += _quotation_table(data, st)
     story += _totals_block(data, st)
     story += _notes_block(data, st)
-    # KeepTogether stops the basis-and-limitations box being split across a page
-    # break, which would leave a stray heading at the foot of page one.
     story.append(KeepTogether(_provenance_block(data, st)))
 
     doc.build(story, onFirstPage=_page_furniture, onLaterPages=_page_furniture)
